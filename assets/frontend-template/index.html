@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f6f1e7">
+  <title>减脂工作台</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@600;700&family=Noto+Sans+SC:wght@400;500&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <!-- 氛围层：纸质噪点 + 两团柔光，营造“餐食记录”的温润质感 -->
+  <div class="atmosphere" aria-hidden="true"></div>
+  <div class="grain" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="减脂工作台首页">
+      <span class="brand-mark"><i data-shape="leaf"></i></span>
+      <span class="brand-text">
+        <b>减脂工作台</b>
+        <small>FATLOSS WORKBENCH</small>
+      </span>
+    </a>
+    <div class="top-actions">
+      <span class="access-badge" id="accessBadge">只读</span>
+      <span class="save-state" id="saveState" hidden></span>
+      <button class="icon-button" id="exportButton" type="button" aria-label="导出数据"><i data-shape="download"></i></button>
+      <button class="icon-button" id="importButton" type="button" aria-label="导入数据"><i data-shape="upload"></i></button>
+    </div>
+  </header>
+
+  <section class="profile-header" id="profileHeader" hidden>
+    <div class="profile-header-inner">
+      <p class="eyebrow">YOUR FATLOSS PLAN</p>
+      <div class="profile-title-row">
+        <div>
+          <h1 id="profileTitle"></h1>
+          <p id="profileMeta"></p>
+        </div>
+        <div class="goal-stamp" aria-hidden="true"><span>DAILY</span><b id="goalKcal">—</b><small>kcal</small></div>
+      </div>
+      <p class="profile-note" id="profileNote"></p>
+    </div>
+  </section>
+
+  <nav class="module-nav" id="moduleNav" aria-label="工作台模块" hidden>
+    <button data-tab="today" class="active"><i data-shape="sun"></i><span>今日</span></button>
+    <button data-tab="week"><i data-shape="calendar"></i><span>本周</span></button>
+    <button data-tab="review"><i data-shape="chart"></i><span>复盘</span></button>
+    <button data-tab="mine"><i data-shape="user"></i><span>我的</span></button>
+  </nav>
+
+  <main id="app" tabindex="-1">
+    <section class="state-view" id="loadingView">
+      <span class="loading-mark"></span>
+      <h1>正在打开减脂工作台</h1>
+      <p>读取档案、目标与餐单…</p>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <dialog id="dataDialog" aria-labelledby="dataDialogTitle">
+    <div class="dialog-head">
+      <div><span class="section-kicker">FATLOSSPACK 1.0</span><h2 id="dataDialogTitle">导入与导出数据</h2></div>
+      <button class="icon-button" id="dialogClose" type="button" aria-label="关闭">×</button>
+    </div>
+    <p class="dialog-note">可粘贴 Agent 生成的 FatLossPack JSON，或导出当前数据。</p>
+    <div class="dialog-actions">
+      <label class="file-button">选择 JSON 文件<input id="importFile" type="file" accept="application/json,.json"></label>
+      <button class="text-button" id="formatButton" type="button">格式化</button>
+      <button class="text-button" id="downloadButton" type="button">下载当前数据</button>
+    </div>
+    <textarea id="jsonEditor" spellcheck="false" aria-label="FatLossPack JSON"></textarea>
+    <p class="dialog-error" id="dialogError" role="alert"></p>
+    <footer class="dialog-footer">
+      <button class="text-button" id="dialogCancel" type="button">取消</button>
+      <button class="text-button primary-action" id="saveButton" type="button">保存到云端</button>
+    </footer>
+  </dialog>
+
+  <script type="module" src="/app.mjs"></script>
+</body>
+</html>

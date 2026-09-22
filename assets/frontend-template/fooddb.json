@@ -1,0 +1,47 @@
+{
+  "_meta": {
+    "version": "1.1.0",
+    "defaultUnit": "g",
+    "defaultPer": 100,
+    "unitNote": "per=100 表示宏量按每 100g / 100ml 计；per=1 表示按每 1 个计。unit 为录入与显示单位（g / ml / 个）。",
+    "source": "中国食物成分表公开常见值（近似口径，非薄荷精确库）",
+    "note": "米面为生重；肉类为生重；蔬菜不计宏量。有包装标签时以标签为准（用「自定义食材」覆盖）。"
+  },
+  "categories": ["主食", "肉类蛋白", "蛋奶", "蔬菜", "水果", "坚果", "其他"],
+  "items": [
+    { "id": "oats", "name": "燕麦片", "category": "主食", "carb": 60, "protein": 13, "fat": 7, "note": "生重" },
+    { "id": "rice", "name": "大米", "category": "主食", "carb": 78, "protein": 7, "fat": 0.8, "note": "生重" },
+    { "id": "sweet-potato", "name": "红薯", "category": "主食", "carb": 22, "protein": 1, "fat": 0.2 },
+    { "id": "purple-potato", "name": "紫薯", "category": "主食", "carb": 22, "protein": 1, "fat": 0.2 },
+    { "id": "potato", "name": "土豆", "category": "主食", "carb": 17, "protein": 2, "fat": 0.2 },
+    { "id": "corn", "name": "玉米（鲜）", "category": "主食", "carb": 22, "protein": 4, "fat": 1.5 },
+    { "id": "beibei-pumpkin", "name": "贝贝南瓜", "category": "主食", "carb": 8, "protein": 1, "fat": 0.2 },
+    { "id": "yam", "name": "山药", "category": "主食", "carb": 12, "protein": 1.9, "fat": 0.2 },
+
+    { "id": "chicken-breast", "name": "鸡胸肉", "category": "肉类蛋白", "carb": 0, "protein": 23, "fat": 2, "note": "生重" },
+    { "id": "chicken-thigh", "name": "鸡腿肉（去皮）", "category": "肉类蛋白", "carb": 0, "protein": 20, "fat": 4, "note": "生重" },
+    { "id": "duck-leg", "name": "鸭腿（带骨）", "category": "肉类蛋白", "carb": 0, "protein": 18, "fat": 14, "note": "可食部，带皮；去皮更优" },
+    { "id": "beef-lean", "name": "瘦牛肉", "category": "肉类蛋白", "carb": 0, "protein": 20, "fat": 3, "note": "生重" },
+    { "id": "salmon", "name": "三文鱼", "category": "肉类蛋白", "carb": 0, "protein": 20, "fat": 8, "note": "生重" },
+    { "id": "basa-fish", "name": "巴沙鱼", "category": "肉类蛋白", "carb": 0, "protein": 18, "fat": 2, "note": "生重" },
+    { "id": "mackerel", "name": "青花鱼", "category": "肉类蛋白", "carb": 0, "protein": 19, "fat": 12, "note": "生重" },
+    { "id": "shrimp", "name": "虾仁", "category": "肉类蛋白", "carb": 0, "protein": 18, "fat": 1, "note": "生重" },
+
+    { "id": "egg", "name": "鸡蛋", "category": "蛋奶", "unit": "个", "per": 1, "carb": 0.7, "protein": 6.5, "fat": 4.5 },
+    { "id": "whole-milk", "name": "全脂牛奶", "category": "蛋奶", "unit": "ml", "carb": 5, "protein": 3.3, "fat": 3.6 },
+    { "id": "yogurt", "name": "无糖酸奶", "category": "蛋奶", "carb": 5, "protein": 3, "fat": 3 },
+
+    { "id": "vegetables", "name": "蔬菜", "category": "蔬菜", "carb": 0, "protein": 0, "fat": 0, "note": "不计碳蛋脂。建议：西兰花、菠菜、生菜、番茄、黄瓜、彩椒、菌菇、大白菜、胡萝卜、西葫芦、冬瓜、芹菜、豆角、油麦菜、娃娃菜、金针菇" },
+
+    { "id": "blueberry", "name": "蓝莓", "category": "水果", "carb": 0, "protein": 0, "fat": 0, "note": "不计碳蛋脂（方法默认）" },
+    { "id": "banana", "name": "香蕉", "category": "水果", "carb": 22, "protein": 1.4, "fat": 0.2 },
+    { "id": "apple", "name": "苹果", "category": "水果", "carb": 14, "protein": 0.3, "fat": 0.2 },
+    { "id": "avocado", "name": "牛油果", "category": "水果", "carb": 9, "protein": 2, "fat": 15 },
+
+    { "id": "pumpkin-seed", "name": "南瓜子", "category": "坚果", "carb": 13, "protein": 30, "fat": 49 },
+    { "id": "mixed-nuts", "name": "混合坚果", "category": "坚果", "carb": 20, "protein": 18, "fat": 55 },
+    { "id": "olive-oil", "name": "橄榄油", "category": "坚果", "carb": 0, "protein": 0, "fat": 100 },
+
+    { "id": "whey-protein", "name": "蛋白粉", "category": "其他", "carb": 8, "protein": 80, "fat": 5 }
+  ]
+}

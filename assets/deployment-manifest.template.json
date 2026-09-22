@@ -1,0 +1,14 @@
+{
+  "manifestVersion": "1.0.0",
+  "product": "fatloss-workbench",
+  "skillVersion": "1.0.0",
+  "frontendVersion": "1.0.0",
+  "hostAdapterVersion": "1.0.0",
+  "dataSchemaVersion": "1.0.0",
+  "compatibleDataSchemaVersions": ["1.0.0"],
+  "migrations": [],
+  "deploymentMode": "replace-at-deploy-time",
+  "deploymentId": "replace-at-deploy-time",
+  "siteUrl": "replace-at-deploy-time",
+  "deployedAt": "replace-at-deploy-time"
+}

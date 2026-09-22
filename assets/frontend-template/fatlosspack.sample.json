@@ -1,0 +1,176 @@
+{
+  "protocol": "fatlosspack",
+  "schemaVersion": "1.0.0",
+  "screening": {
+    "age": 30,
+    "pregnantOrBreastfeeding": false,
+    "eatingDisorderRisk": false,
+    "majorCondition": false,
+    "concerningSymptoms": false,
+    "mode": "personalized",
+    "reviewedAt": "2026-09-21T10:00:00+08:00"
+  },
+  "profile": {
+    "gender": "female",
+    "weight": 59,
+    "targetWeight": 55,
+    "exerciseHours": 4,
+    "exerciseTimes": 4,
+    "startDate": "2026-09-22"
+  },
+  "method": {
+    "id": "lifestyle"
+  },
+  "goal": {
+    "carb": 130,
+    "protein": 94,
+    "fat": 65,
+    "kcal": 1481
+  },
+  "fixedIntakes": {
+    "proteinPowder": 0,
+    "milk": 250,
+    "note": "蛋白粉默认按无处理；如饮用需从蛋白目标中扣减。"
+  },
+  "supplements": {
+    "blueberries": true,
+    "vegetables": true,
+    "pumpkinSeeds": false,
+    "nuts": false
+  },
+  "foodLibrary": {
+    "selected": [],
+    "hidden": [],
+    "custom": []
+  },
+  "weeklyPlan": {
+    "confirmed": true,
+    "weekIndex": 1,
+    "startDate": "2026-09-22",
+    "days": [
+      {
+        "day": 1,
+        "date": "2026-09-22",
+        "weekday": "二",
+        "reviewDay": false,
+        "meals": [
+          { "id": "m1", "name": "早餐", "time": "08:00", "ingredients": [{ "name": "燕麦片", "amount": 50, "unit": "g" }, { "name": "鸡蛋", "amount": 2, "unit": "个" }, { "name": "全脂牛奶", "amount": 250, "unit": "ml" }] },
+          { "id": "m2", "name": "午餐", "time": "12:30", "ingredients": [{ "name": "大米", "amount": 150, "unit": "g" }, { "name": "鸡胸肉", "amount": 150, "unit": "g" }, { "name": "蔬菜", "amount": 200, "unit": "g" }] },
+          { "id": "m3", "name": "晚餐", "time": "18:30", "ingredients": [{ "name": "红薯", "amount": 200, "unit": "g" }, { "name": "三文鱼", "amount": 120, "unit": "g" }, { "name": "蔬菜", "amount": 150, "unit": "g" }] },
+          { "id": "m4", "name": "加餐", "time": "15:30", "ingredients": [{ "name": "蓝莓", "amount": 100, "unit": "g" }] }
+        ]
+      },
+      {
+        "day": 2,
+        "date": "2026-09-23",
+        "weekday": "三",
+        "reviewDay": false,
+        "meals": [
+          { "id": "m5", "name": "早餐", "time": "08:00", "ingredients": [{ "name": "燕麦片", "amount": 50, "unit": "g" }, { "name": "无糖酸奶", "amount": 200, "unit": "g" }] },
+          { "id": "m6", "name": "午餐", "time": "12:30", "ingredients": [{ "name": "大米", "amount": 150, "unit": "g" }, { "name": "瘦牛肉", "amount": 150, "unit": "g" }] },
+          { "id": "m7", "name": "晚餐", "time": "18:30", "ingredients": [{ "name": "玉米（鲜）", "amount": 1, "unit": "根" }, { "name": "虾仁", "amount": 150, "unit": "g" }] },
+          { "id": "m8", "name": "加餐", "time": "15:30", "ingredients": [{ "name": "蔬菜", "amount": 200, "unit": "g" }] }
+        ]
+      },
+      {
+        "day": 3,
+        "date": "2026-09-24",
+        "weekday": "四",
+        "reviewDay": false,
+        "meals": [
+          { "id": "m9", "name": "早餐", "time": "08:00", "ingredients": [{ "name": "鸡蛋", "amount": 2, "unit": "个" }, { "name": "燕麦片", "amount": 50, "unit": "g" }] },
+          { "id": "m10", "name": "午餐", "time": "12:30", "ingredients": [{ "name": "大米", "amount": 150, "unit": "g" }, { "name": "鸡腿肉（去皮）", "amount": 150, "unit": "g" }] },
+          { "id": "m11", "name": "晚餐", "time": "18:30", "ingredients": [{ "name": "土豆", "amount": 200, "unit": "g" }, { "name": "巴沙鱼", "amount": 150, "unit": "g" }] },
+          { "id": "m12", "name": "加餐", "time": "15:30", "ingredients": [{ "name": "蓝莓", "amount": 100, "unit": "g" }] }
+        ]
+      },
+      {
+        "day": 4,
+        "date": "2026-09-25",
+        "weekday": "五",
+        "reviewDay": false,
+        "meals": [
+          { "id": "m13", "name": "早餐", "time": "08:00", "ingredients": [{ "name": "燕麦片", "amount": 50, "unit": "g" }, { "name": "全脂牛奶", "amount": 250, "unit": "ml" }] },
+          { "id": "m14", "name": "午餐", "time": "12:30", "ingredients": [{ "name": "大米", "amount": 150, "unit": "g" }, { "name": "瘦牛肉", "amount": 150, "unit": "g" }] },
+          { "id": "m15", "name": "晚餐", "time": "18:30", "ingredients": [{ "name": "红薯", "amount": 200, "unit": "g" }, { "name": "鸡胸肉", "amount": 150, "unit": "g" }] },
+          { "id": "m16", "name": "加餐", "time": "15:30", "ingredients": [{ "name": "蔬菜", "amount": 200, "unit": "g" }] }
+        ]
+      },
+      {
+        "day": 5,
+        "date": "2026-09-26",
+        "weekday": "六",
+        "reviewDay": false,
+        "meals": [
+          { "id": "m17", "name": "早餐", "time": "08:00", "ingredients": [{ "name": "鸡蛋", "amount": 2, "unit": "个" }, { "name": "玉米（鲜）", "amount": 1, "unit": "根" }] },
+          { "id": "m18", "name": "午餐", "time": "12:30", "ingredients": [{ "name": "大米", "amount": 150, "unit": "g" }, { "name": "三文鱼", "amount": 120, "unit": "g" }] },
+          { "id": "m19", "name": "晚餐", "time": "18:30", "ingredients": [{ "name": "山药", "amount": 200, "unit": "g" }, { "name": "虾仁", "amount": 150, "unit": "g" }] },
+          { "id": "m20", "name": "加餐", "time": "15:30", "ingredients": [{ "name": "蓝莓", "amount": 100, "unit": "g" }] }
+        ]
+      },
+      {
+        "day": 6,
+        "date": "2026-09-27",
+        "weekday": "日",
+        "reviewDay": false,
+        "meals": [
+          { "id": "m21", "name": "早餐", "time": "08:00", "ingredients": [{ "name": "燕麦片", "amount": 50, "unit": "g" }, { "name": "无糖酸奶", "amount": 200, "unit": "g" }] },
+          { "id": "m22", "name": "午餐", "time": "12:30", "ingredients": [{ "name": "土豆", "amount": 200, "unit": "g" }, { "name": "鸡腿肉（去皮）", "amount": 150, "unit": "g" }] },
+          { "id": "m23", "name": "晚餐", "time": "18:30", "ingredients": [{ "name": "红薯", "amount": 200, "unit": "g" }, { "name": "巴沙鱼", "amount": 150, "unit": "g" }] },
+          { "id": "m24", "name": "加餐", "time": "15:30", "ingredients": [{ "name": "蔬菜", "amount": 200, "unit": "g" }] }
+        ]
+      },
+      {
+        "day": 7,
+        "date": "2026-09-28",
+        "weekday": "一",
+        "reviewDay": true,
+        "meals": [
+          { "id": "m25", "name": "早餐", "time": "08:00", "ingredients": [{ "name": "鸡蛋", "amount": 2, "unit": "个" }, { "name": "燕麦片", "amount": 50, "unit": "g" }] },
+          { "id": "m26", "name": "午餐", "time": "12:30", "ingredients": [{ "name": "大米", "amount": 150, "unit": "g" }, { "name": "瘦牛肉", "amount": 150, "unit": "g" }] },
+          { "id": "m27", "name": "晚餐", "time": "18:30", "ingredients": [{ "name": "紫薯", "amount": 200, "unit": "g" }, { "name": "鸡胸肉", "amount": 150, "unit": "g" }] },
+          { "id": "m28", "name": "加餐", "time": "15:30", "ingredients": [{ "name": "蓝莓", "amount": 100, "unit": "g" }] }
+        ]
+      }
+    ],
+    "shopping": [
+      { "name": "燕麦片", "amount": "1 袋" },
+      { "name": "鸡蛋", "amount": "14 个" },
+      { "name": "鸡胸肉", "amount": "1 kg" },
+      { "name": "大米", "amount": "1 袋" },
+      { "name": "三文鱼", "amount": "500 g" }
+    ],
+    "nutritionTotals": []
+  },
+  "logs": {
+    "2026-09-22": {
+      "weight": 59.0,
+      "sleep": 7.5,
+      "training": "力量 60min",
+      "hunger": 3,
+      "meals": {
+        "早餐": {
+          "items": [
+            { "id": "oats", "name": "燕麦片", "amount": 60, "unit": "g", "carb": 36, "protein": 7.8, "fat": 4.2 },
+            { "id": "egg", "name": "鸡蛋", "amount": 2, "unit": "个", "carb": 1.4, "protein": 13, "fat": 9 },
+            { "id": "whole-milk", "name": "全脂牛奶", "amount": 250, "unit": "ml", "carb": 12.5, "protein": 8.3, "fat": 9 }
+          ]
+        },
+        "午餐": {
+          "items": [
+            { "id": "rice", "name": "大米", "amount": 150, "unit": "g", "carb": 117, "protein": 10.5, "fat": 1.2 },
+            { "id": "chicken-breast", "name": "鸡胸肉", "amount": 150, "unit": "g", "carb": 0, "protein": 34.5, "fat": 3 }
+          ]
+        }
+      }
+    }
+  },
+  "reviews": [],
+  "favoriteMeals": [
+    { "id": "fav1", "name": "鸡胸肉大米套餐", "mealName": "午餐", "ingredients": [{ "name": "鸡胸肉", "amount": 150, "unit": "g" }, { "name": "大米", "amount": 150, "unit": "g" }] }
+  ],
+  "history": {
+    "weeks": [],
+    "reviews": []
+  }
+}
