@@ -1,5 +1,5 @@
 ---
-name: fatloss-workbench
+name: vf-fatloss-workbench
 description: Collect profile and health screening, let the user pick one of three Tan-Shi fat-loss methods (lifestyle / carb-cycle / recomposition, non-mixable), compute daily macro targets by the chosen method, generate a weekly meal plan with shopping list, provide a customizable food library (override/hide built-ins, add custom foods, 6-type filter), support fast daily logging via favorite meals and per-ingredient steppers, auto-compute daily intake deviations in the 7-day review, validate the FatLossPack, and persist it to the cloud (editable + read-only share link) with a local JSON fallback. The deployable frontend ships three switchable themes (organic / industrial / editorial). Excludes medical diagnosis, inventory/fridge, social, payment, training prescription, and coach chat.
 author: "VanF"
 ---
