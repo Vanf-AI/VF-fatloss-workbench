@@ -15,7 +15,7 @@ Skill 更新不会自动修改线上网站。升级属于一次新的线上发�
 - `dataSchemaVersion`、`compatibleDataSchemaVersions`、`migrations`；
 - `deploymentMode`、`deploymentId`、`siteUrl`、`deployedAt`。
 
-版本清单只能保存公开版本和部署标识，禁止包含 Token、Cookie、Key、Secret、用户邮箱和数据库凭据。正式发布时把所有 `replace-at-deploy-time` 替换为真实值。静态资源使用版本化文件名或查询参数，防止浏览器继续加载旧缓存。
+版本清单只能保存公开版本和部署标识，禁止包含 Token、Cookie、Key、Secret、用户邮箱和数据库凭据。正式发布时把所有 `replace-at-deploy-time` 替换为真实值。静态资源使用版本化文件名或查询参数（`?v=N`），防止浏览器继续加载旧缓存。**注意：`app.mjs` 由 `cloud-init.js` 动态 `import("./app.mjs?v=N")` 加载，改代码 / 数据后除 `index.html` 里的 `?v=` 外，还要同步递增 `cloud-init.js` 里 import 的 `?v=`，否则用户仍读到旧 `app.mjs`。**
 
 使用确定性脚本生成正式清单：
 

@@ -30,16 +30,16 @@ history
 - `goal`：`carb`、`protein`、`fat`、`kcal`（整数）；`kcal = carb*4 + protein*4 + fat*9`。
 - `fixedIntakes`：`proteinPowder`、`milk`（数值）、`note`。
 - `supplements`：`blueberries`、`vegetables`、`pumpkinSeeds`、`nuts`（布尔）。
-- `foodLibrary`：`selected[]`、`hidden[]`、`custom[]`（每项 `{ name, category, carb, protein, fat, packageGrams, packageUnit }`）。
+- `foodLibrary`：`selected[]`（历史遗留，早期选食材用，现已弃用、保留空数组向后兼容）、`hidden[]`（隐藏的内置食材 `id` 数组）、`custom[]`（自定义 / 覆盖条目）。`custom[]` 每项 `{ id, name, carb, protein, fat, unit, per, category, note? }`：`id` 命中内置同 `id`=覆盖该内置，否则纯新增（`custom-*`）；`carb/protein/fat` 为该条目基准量下的宏量克数；`unit` 为 `g` / `ml` / `个`；`per` 为基准量（100=每 100g/ml，1=每 1 个）；`category` 为 6 类之一或内置细分。详见 [food-library.md](food-library.md)。
 - `weeklyPlan`：`confirmed`（布尔）、`weekIndex`、`startDate`、`days[]`、`shopping[]`、`nutritionTotals[]`。
   - `days[]`：每项 `{ day, date, weekday, reviewDay, meals[] }`。
   - `meals[]`：每项 `{ id, name, time, ingredients[] }`；`name` 限定 `早餐` / `午餐` / `晚餐` / `加餐`。
   - `ingredients[]`：每项 `{ name, amount, unit }`。
-- `logs`：以天号为键的对象；每天 `{ weight?, sleep?, training?, hunger?, deviation?, meals? }`。
+- `logs`：以天号为键的对象；每天 `{ weight?, sleep?, training?, hunger?, meals? }`。执行偏差不落库：由前端 `computeDeviations` 遍历 `meals` 的宏量快照求和（`dayIntake`）后与 `goal` 对比自动得出，无需用户手填 `deviation`。
   - `meals`：以餐名（`早餐` / `午餐` / `晚餐` / `加餐`）为键；每餐 `{ items[] }`。
   - `items[]`：每项 `{ id, name, amount, unit, carb, protein, fat }`；`amount` 为摄入数量、`unit` 为单位（`g` / `ml` / `个`），`carb/protein/fat` 为该食材该份数量折算后的宏量（克，快照，保留历史不受食材库更新影响）。该餐合计宏量 = Σ items 的 `carb/protein/fat`。
 - `reviews`：每项 `{ day, message, nextGoal, confirmed }`；`nextGoal` 同 `goal` 结构。
-- `favoriteMeals`：每项 `{ id, name, mealName, ingredients[] }`。
+- `favoriteMeals`：每项 `{ id, name, mealName, ingredients[] }`；`ingredients[]` 每项 `{ id, name, amount, unit }`，只存食材与份量、**不存宏量快照**——「记入」时按当前食材库实时算碳蛋脂，食材库改动后自动跟随。
 - `history`：`weeks[]`、`reviews[]`（归档已完成周，只读不重算）。
 
 ## 引用与安全

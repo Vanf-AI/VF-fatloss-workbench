@@ -41,4 +41,4 @@
 - 蔬菜不计碳蛋脂，记「蔬菜」即可，吃足为准。
 - 烹调油按实际用量记（橄榄油按 g）。
 - 有包装标签时用「自定义食材」按标签覆盖内置值。
-- 自定义食物写入 `foodLibrary.custom[]`，结构见 [fatlosspack-1.0.md](fatlosspack-1.0.md)。
+- 自定义食物写入 `foodLibrary.custom[]`，结构见 [fatlosspack-1.0.md](fatlosspack-1.0.md)；食材库覆盖 / 隐藏 / 6 类归一规则见 [food-library.md](food-library.md)。

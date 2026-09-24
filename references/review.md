@@ -3,8 +3,9 @@
 每 7 天（每周 `reviewDay`）综合一次，结果写入 `reviews[]` 与 `goal` 的 `nextGoal`。只使用已确认的 D1 与 D7 体重趋势，不用单日体重下判断。
 
 ## 输入
-- `logs` 中本周每天的 `weight` / `sleep` / `training` / `hunger` / `deviation`。
+- `logs` 中本周每天的 `weight` / `sleep` / `training` / `hunger`。
 - 当前 `goal` 与阶段基准体重 `stageBaselineWeight`。
+- **执行偏差（deviation）自动计算**：前端 `computeDeviations` 遍历每日 `meals` 的宏量快照求和（`dayIntake`），与 `goal` 逐项对比得出 `dCarb / dProtein / dFat` 及偏差率；判定规则——任一项 >+10% 记「超量」、任一项 <−10% 记「不足」、否则「达标」。用户无需手动填写偏差。
 
 ## 生活化减脂 / 碳水循环 的调整
 - 平均每 7 天下降约 1%：保持当前目标。

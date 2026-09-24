@@ -107,9 +107,25 @@ export function validateFatLossPack(pack) {
     for (const k of ["selected", "hidden", "custom"]) {
       if (!Array.isArray(fl[k])) err(`foodLibrary.${k}`, "应为数组");
     }
+    if (Array.isArray(fl.hidden)) {
+      fl.hidden.forEach((id, i) => {
+        if (!isStr(id)) err(`foodLibrary.hidden[${i}]`, "应为内置食材 id 字符串");
+      });
+    }
     if (Array.isArray(fl.custom)) {
       fl.custom.forEach((c, i) => {
-        if (!isObj(c)) err(`foodLibrary.custom[${i}]`, "应为对象");
+        if (!isObj(c)) return err(`foodLibrary.custom[${i}]`, "应为对象");
+        if (!isStr(c.id)) err(`foodLibrary.custom[${i}].id`, "应为字符串");
+        if (!isStr(c.name)) err(`foodLibrary.custom[${i}].name`, "应为字符串");
+        for (const k of ["carb", "protein", "fat"]) {
+          if (!isNum(c[k])) err(`foodLibrary.custom[${i}].${k}`, "应为数字");
+        }
+        if (c.unit !== undefined && !isStr(c.unit))
+          err(`foodLibrary.custom[${i}].unit`, "应为字符串（g / ml / 个）");
+        if (c.per !== undefined && (!isNum(c.per) || c.per <= 0))
+          err(`foodLibrary.custom[${i}].per`, "应为正数（100 或 1）");
+        if (c.category !== undefined && !isStr(c.category))
+          err(`foodLibrary.custom[${i}].category`, "应为字符串");
       });
     }
   }

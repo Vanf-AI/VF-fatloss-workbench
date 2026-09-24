@@ -35,7 +35,7 @@
 
 判定**四项产品结果**是否齐备：① 可编辑 ② 可持久化 ③ 可只读分享 ④ 可识别冲突。四者齐备才进入 host-native 持久化；缺任一项即转本地 JSON 兜底（见 [deliverables.md](deliverables.md) 第 3 节）并报告缺口。
 
-## 可执行模板（本机实测，2026-09-22）
+## 可执行模板
 
 ### 工具名
 
@@ -82,14 +82,16 @@ workbuddy_cloud_service(
 ### 接线（激活后）
 
 - 纯 HTML 无构建 → 用 CDN `<script>`（`@tencent-ai/workbuddy-cloud-sdk@dev`），`WorkBuddyCloud.createWorkBuddyCloud({ endpoint, publishableKey })`；`endpoint` 必传且只能来自 `publicConfig`，不得硬编码或从 `location`/环境变量取。
-- **CDN 域名**：skill 内置 `cloud-service` 文档默认写 jsdelivr，但 jsdelivr 在部分网络（实测中国网络）不可达；本 skill 用 **unpkg** 兜底：`https://unpkg.com/@tencent-ai/workbuddy-cloud-sdk@dev/lib/index.global.js`。
-- 读 `references/database/code-generation.md` 接数据库模块。数据表 `fatloss_documents`（`id` 自增 PK + `owner_id TEXT DEFAULT auth.uid()` + `doc JSONB` + `revision INTEGER` + `updated_at TIMESTAMPTZ`），RLS 四策略：`fd_read_all`（SELECT，`USING true`，公开读=只读分享）、`fd_insert_own` / `fd_update_own` / `fd_delete_own`（`owner_id = auth.uid()`）。
+- **CDN 域名**：skill 内置 `cloud-service` 文档默认写 jsdelivr，但 jsdelivr 在部分网络环境（如中国大陆）不可达；本 skill 用 **unpkg** 兜底：`https://unpkg.com/@tencent-ai/workbuddy-cloud-sdk@dev/lib/index.global.js`。
+- 读 `references/database/code-generation.md` 接数据库模块。数据表 `fatloss_documents`（`id` 自增 PK + `owner_id TEXT DEFAULT auth.uid()` + `doc JSONB` + `revision INTEGER` + `updated_at TIMESTAMPTZ`）。RLS 写策略固定三则：`fd_insert_own` / `fd_update_own` / `fd_delete_own`（`owner_id = auth.uid()`）；**读策略二选一**：多用户共享 / 公开只读 → `fd_read_all`（SELECT `USING true`）；单人私有（个人健康数据推荐）→ `fd_read_own`（SELECT `USING (owner_id = auth.uid())`）。
 - 前端通过 `window.FATLOSS_HOST_ADAPTER` 注入 `load`/`save`（`load` 取 owner 行、无行回退内置默认包 revision 0；`save` 有行乐观锁 update、无行 insert）。
+- **auto-seed**：`load()` 内「云端无行 且 `DEFAULT_PACK.logs` 非空 → 自动 insert 默认包」；`owner_id` 由 `auth.uid()` 自动填。这样 Agent 预生成的首个 FatLossPack 能在用户首次登录时自动落库（避免后台直写 5KB+ JSON 的不可靠路径）。
 - **登录闸门**：数据库按 `owner_id` 隔离、无匿名登录，编辑前必须登录；单人工具用「邮箱+密码」登录（注册走 `sendOtp`→`verifyOtp` 带 `password`）。
+- **隐私红线（default-pack 只放空模板）**：`default-pack.js` 是公开可读静态文件，任何拿到链接的人都能 curl 到其内容；**严禁**把真实个人数据（体重 / 档案 / 餐单 / 记录 / 邮箱）写进 `default-pack.js`。正确姿势：`default-pack.js` 只放空骨架（`logs` 为空、不触发 auto-seed）；真实数据由 Agent 生成后走登录后的 auto-seed 写进私有云，落库后抽空公开文件。
 - 发布站点用 `workbuddy_sites_deploy`，并**复用**该 `applicationId` 作 `appId`（保持域与 Origin 一致，否则云登录失效）。
 - 载体顺序不变：Cloudflare → WorkBuddy Cloud Service → 本地 JSON。
 
-本机实测（2026-09-22）：工具名 `workbuddy_cloud_service`，`inspect` 空会话 → `activated:false`；`activate` 成功返回 `appId wbapp_...`、`endpoint https://<domainPrefix>-<x>.app.workbuddy.host`、`billingStatus:normal / provisionStatus:assigned`。随后完成建表 + RLS、前端接 SDK + 登录 + host adapter、发布站点（shareLink 同 endpoint 根路径），Chrome headless 验证未登录态正确渲染登录视图。**结论：减脂工作台已以 host-native（WorkBuddy Cloud Service）上线，不再默认降级 Cloudflare / 本地 JSON；登录后数据读写需用户实测（auth 仅线上 HTTPS 域可用）。**
+实测要点（供接线参照）：`inspect` 空会话返回 `activated:false`；`activate` 成功后返回 `appId`（`wbapp_...`）、`endpoint`（`https://<domainPrefix>-<x>.app.workbuddy.host`）、`billingStatus:normal / provisionStatus:assigned`。随后按序完成建表 + RLS、前端接 SDK + 登录 + host adapter、发布站点（shareLink 同 endpoint 根路径）。**注意：云登录的 auth 仅线上 HTTPS 域可用，本地 file:// 或 http 预览无法完成登录，须在部署后由用户实测读写。**
 
 ### 可用载体（按匹配度）
 

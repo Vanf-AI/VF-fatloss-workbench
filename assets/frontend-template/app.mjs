@@ -17,8 +17,9 @@ const state = {
   tab: "today",
   endpoint: null,
   saving: false,
-  foodDb: [],        // 内置食材库（fooddb.json）
-  customFoods: [],   // 自定义食材，持久化到 foodLibrary.custom[]
+  foodDb: [],        // 内置食材库（fooddb.json，只读基准）
+  customFoods: [],   // 自定义/覆盖食材，持久化到 foodLibrary.custom[]
+  hiddenFoods: [],   // 隐藏的内置食材 id，持久化到 foodLibrary.hidden[]
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -123,7 +124,25 @@ async function loadPack() {
 // 食材库：内置 fooddb.json + 自定义食材合并，宏量按克数折算
 // ==========================================================================
 const round1 = (n) => Math.round(n * 10) / 10;
-const fmtNum = (n) => String(round1(n || 0));
+// 展示用：统一保留 1 位小数（如 36 → "36.0"，避免浮点长串小数）
+const fmtNum = (n) => round1(Number(n) || 0).toFixed(1);
+
+// 统一类型（6 类）：主食 / 蛋白质 / 脂肪 / 水果 / 蔬菜 / 其他
+const FOOD_TYPES = ["主食", "蛋白质", "脂肪", "水果", "蔬菜", "其他"];
+// 内置细分 category → 6 类归一
+const FOOD_TYPE_MAP = {
+  "主食": "主食",
+  "肉类蛋白": "蛋白质",
+  "蛋奶": "蛋白质",
+  "坚果": "脂肪",
+  "蔬菜": "蔬菜",
+  "水果": "水果",
+  "其他": "其他",
+  "自定义": "其他",
+};
+function foodType(f) {
+  return FOOD_TYPE_MAP[f.category] || (FOOD_TYPES.includes(f.category) ? f.category : "其他");
+}
 
 async function loadFoodDb() {
   try {
@@ -132,11 +151,50 @@ async function loadFoodDb() {
   } catch (e) {
     state.foodDb = [];
   }
-  state.customFoods = (state.pack?.foodLibrary?.custom) || [];
+  const custom = state.pack?.foodLibrary?.custom || [];
+  state.customFoods = custom.map((f, i) => normalizeCustomFood(f, i));
+  state.hiddenFoods = state.pack?.foodLibrary?.hidden || [];
 }
 
+// 规范化自定义食材：补齐 id/unit/per，向后兼容旧数据（旧条目只有 name/carb/protein/fat）
+function normalizeCustomFood(f, i) {
+  return {
+    id: f.id || ("custom-" + (f.name ? f.name.replace(/\s+/g, "-") : "item") + "-" + i),
+    name: f.name || "未命名食材",
+    carb: Number(f.carb) || 0,
+    protein: Number(f.protein) || 0,
+    fat: Number(f.fat) || 0,
+    unit: f.unit || "g",
+    per: f.per || 100,
+    category: f.category || "其他",
+    note: f.note || "",
+  };
+}
+
+function builtinIdSet() {
+  return new Set(state.foodDb.map((f) => f.id));
+}
+
+// 最终生效食材：内置（应用覆盖、过滤隐藏）+ 纯新增自定义。
+// custom 中 id 与内置同名的条目视为「覆盖内置」，隐藏的内置不参与选择与记录。
 function allFoods() {
-  return [...state.foodDb, ...state.customFoods];
+  const hidden = new Set(state.hiddenFoods || []);
+  const builtinIds = builtinIdSet();
+  const overrideById = {};
+  for (const c of state.customFoods) {
+    if (builtinIds.has(c.id)) overrideById[c.id] = c;
+  }
+  const result = [];
+  for (const f of state.foodDb) {
+    if (hidden.has(f.id)) continue;
+    const ov = overrideById[f.id];
+    // 覆盖只替换名称与宏量，分类保持内置原分类
+    result.push(ov ? { ...f, ...ov, id: f.id, category: f.category, overridden: true } : f);
+  }
+  for (const c of state.customFoods) {
+    if (!builtinIds.has(c.id)) result.push(c);
+  }
+  return result;
 }
 
 // 配餐口径名 → 录入库 id 的别名映射（周餐单同步到今日时按名匹配）
@@ -221,7 +279,7 @@ function renderProfileHeader() {
   $("#profileMeta").textContent = `起始 ${p.startDate ?? "—"} · 每周 ${p.exerciseHours ?? 0} 小时 / ${p.exerciseTimes ?? 0} 次`;
   $("#goalKcal").textContent = g ? Math.round(g.kcal) : "—";
   $("#profileNote").textContent = g
-    ? `每日目标：碳水 ${g.carb}g · 蛋白 ${g.protein}g · 脂肪 ${g.fat}g`
+    ? `每日目标：碳水 ${fmtNum(g.carb)}g · 蛋白 ${fmtNum(g.protein)}g · 脂肪 ${fmtNum(g.fat)}g`
     : "record-only 模式，无目标";
   $("#profileHeader").hidden = false;
   $("#moduleNav").hidden = false;
@@ -317,9 +375,9 @@ function renderToday() {
       <section class="card">
         <h2><i>${icon("sun")}</i>今日目标</h2>
         <div class="macro-grid">
-          <div class="macro-cell"><b>${g.carb}</b><span>碳水 g</span></div>
-          <div class="macro-cell"><b>${g.protein}</b><span>蛋白 g</span></div>
-          <div class="macro-cell"><b>${g.fat}</b><span>脂肪 g</span></div>
+          <div class="macro-cell"><b>${fmtNum(g.carb)}</b><span>碳水 g</span></div>
+          <div class="macro-cell"><b>${fmtNum(g.protein)}</b><span>蛋白 g</span></div>
+          <div class="macro-cell"><b>${fmtNum(g.fat)}</b><span>脂肪 g</span></div>
           <div class="macro-cell"><b>${Math.round(g.kcal)}</b><span>kcal</span></div>
         </div>
       </section>`);
@@ -333,22 +391,34 @@ function renderToday() {
     holder.appendChild(renderMealRow(name));
   }
 
-  // 额外记录项（体重/睡眠/训练/饥饿感）
+  // 额外记录项（体重/睡眠/训练/饥饿感/备注）
   const extraRow = el(`
     <div class="meal-row">
       <div class="meal-row-head"><b>今日状态</b><span>复盘用</span></div>
       <div class="meal-macros cols-4">
         <label>体重 kg<input type="number" min="0" step="0.1" data-extra="weight"></label>
         <label>睡眠 h<input type="number" min="0" step="0.5" data-extra="sleep"></label>
-        <label>训练<input type="text" data-extra="training" placeholder="如 40min"></label>
+        <label>训练<select data-extra="training">
+          <option value="">未记录</option>
+          <option value="推">推</option>
+          <option value="拉">拉</option>
+          <option value="蹲">蹲</option>
+          <option value="休息">休息</option>
+        </select></label>
         <label>饥饿 1-5<input type="number" min="1" max="5" step="1" data-extra="hunger"></label>
       </div>
     </div>`);
   if (today) {
     extraRow.querySelector('[data-extra="weight"]').value = today.weight ?? "";
     extraRow.querySelector('[data-extra="sleep"]').value = today.sleep ?? "";
-    extraRow.querySelector('[data-extra="training"]').value = today.training ?? "";
     extraRow.querySelector('[data-extra="hunger"]').value = today.hunger ?? "";
+    // 历史训练值可能是自由文本：不在选项中时补一个选项再回显
+    if (today.training) {
+      const tSel = extraRow.querySelector('[data-extra="training"]');
+      const v = String(today.training);
+      if (![...tSel.options].some((o) => o.value === v)) tSel.appendChild(el(`<option value="${esc(v)}">${esc(v)}</option>`));
+      tSel.value = v;
+    }
   }
   extraRow.querySelectorAll("input").forEach((input) => {
     input.addEventListener("change", async () => {
@@ -465,6 +535,7 @@ function renderMealRow(name) {
   const items = meal?.items || [];
   const sum = mealMacros(name);
   const plan = planIngredientsFor(name);
+  const favForMeal = favoriteForMeal(name);
 
   const row = el(`
     <div class="meal-row" data-meal="${name}">
@@ -474,6 +545,11 @@ function renderMealRow(name) {
       </div>
       <div class="meal-items"></div>
       <button class="add-food-btn" type="button">＋ 添加食材</button>
+      ${(favForMeal || items.length) ? `
+      <div class="meal-actions">
+        ${favForMeal ? `<span class="fav-hint">常用餐 · ${esc(favForMeal.name)}</span><button class="text-button fav-apply-btn" type="button">记入</button>` : ""}
+        ${items.length ? `<button class="text-button fav-save-btn" type="button">存为常用餐</button>` : ""}
+      </div>` : ""}
     </div>`);
 
   const listHolder = row.querySelector(".meal-items");
@@ -487,14 +563,32 @@ function renderMealRow(name) {
     const li = el(`
       <div class="meal-item">
         <span class="meal-item-name">${esc(it.name)}</span>
-        <span class="meal-item-grams">${it.amount}${it.unit || "g"}</span>
-        <span class="meal-item-macros">碳${fmtNum(it.carb)} · 蛋${fmtNum(it.protein)} · 脂${fmtNum(it.fat)}</span>
-        <button class="meal-item-del" type="button" data-idx="${idx}" aria-label="删除${esc(it.name)}">×</button>
+        <div class="meal-item-controls">
+          <div class="stepper">
+            <button class="step-btn step-minus" type="button" data-idx="${idx}" aria-label="减少${esc(it.name)}">−</button>
+            <button class="step-value" type="button" data-idx="${idx}" title="点击精确修改" aria-label="修改${esc(it.name)}份量">${it.amount}<span class="unit">${it.unit || "g"}</span></button>
+            <button class="step-btn step-plus" type="button" data-idx="${idx}" aria-label="增加${esc(it.name)}">＋</button>
+          </div>
+          <button class="meal-item-del" type="button" data-idx="${idx}" aria-label="删除${esc(it.name)}">×</button>
+        </div>
       </div>`);
     listHolder.appendChild(li);
   });
 
   row.querySelector(".add-food-btn").addEventListener("click", () => openFoodPicker(name));
+  const applyBtn = row.querySelector(".fav-apply-btn");
+  if (applyBtn) applyBtn.addEventListener("click", () => applyFavoriteToMeal(name));
+  const saveBtn = row.querySelector(".fav-save-btn");
+  if (saveBtn) saveBtn.addEventListener("click", () => saveMealAsFavorite(name));
+  row.querySelectorAll(".step-minus").forEach((btn) => {
+    btn.addEventListener("click", () => adjustFoodInMeal(name, Number(btn.dataset.idx), -1));
+  });
+  row.querySelectorAll(".step-plus").forEach((btn) => {
+    btn.addEventListener("click", () => adjustFoodInMeal(name, Number(btn.dataset.idx), +1));
+  });
+  row.querySelectorAll(".step-value").forEach((btn) => {
+    btn.addEventListener("click", () => inlineEditAmount(btn, name, Number(btn.dataset.idx)));
+  });
   row.querySelectorAll(".meal-item-del").forEach((btn) => {
     btn.addEventListener("click", () => removeFoodFromMeal(name, Number(btn.dataset.idx)));
   });
@@ -519,13 +613,209 @@ function removeFoodFromMeal(name, idx) {
   savePack();
 }
 
-function addCustomFood(name, carb, protein, fat) {
-  const food = { id: "custom-" + Date.now(), name, carb: Number(carb) || 0, protein: Number(protein) || 0, fat: Number(fat) || 0, category: "自定义" };
-  state.customFoods.push(food);
-  const lib = state.pack.foodLibrary || (state.pack.foodLibrary = {});
-  const custom = lib.custom || (lib.custom = []);
-  custom.push({ name, carb: food.carb, protein: food.protein, fat: food.fat, category: "自定义" });
+// 步长：按单位智能定（个 ±1 / ml ±50 / g 及其他 ±10）
+function stepFor(unit) {
+  if (unit === "个") return 1;
+  if (unit === "ml") return 50;
+  return 10;
+}
+
+// 调整某餐某食材份量：按步长增减、重算宏量，减到 ≤0 则删除该行
+function adjustFoodInMeal(name, idx, delta) {
+  const meal = todayMeal(name);
+  const item = meal?.items?.[idx];
+  if (!item) return;
+  const step = stepFor(item.unit);
+  const amount = round1((Number(item.amount) || 0) + delta * step);
+  if (amount <= 0) {
+    meal.items.splice(idx, 1);
+  } else {
+    const food = findFood(item.id);
+    let m;
+    if (food) {
+      m = foodMacros(food, amount);
+      item.id = food.id;
+      item.name = food.name;
+      item.unit = food.unit || item.unit;
+    } else {
+      // 食材库已不含该食材（被删/隐藏）：按原宏量密度线性缩放，保持快照一致
+      const k = amount / (Number(item.amount) || 1);
+      m = { carb: round1((item.carb || 0) * k), protein: round1((item.protein || 0) * k), fat: round1((item.fat || 0) * k) };
+    }
+    item.amount = amount;
+    item.carb = m.carb;
+    item.protein = m.protein;
+    item.fat = m.fat;
+  }
+  renderToday();
   savePack();
+}
+
+// 精准修改某餐某食材份量：直接设为精确值并重算宏量，≤0 则删除
+function setFoodAmount(name, idx, value) {
+  const meal = todayMeal(name);
+  const item = meal?.items?.[idx];
+  if (!item) return;
+  const amount = round1(Number(value));
+  if (!Number.isFinite(amount) || amount <= 0) {
+    meal.items.splice(idx, 1);
+  } else {
+    const food = findFood(item.id);
+    let m;
+    if (food) {
+      m = foodMacros(food, amount);
+      item.id = food.id;
+      item.name = food.name;
+      item.unit = food.unit || item.unit;
+    } else {
+      const k = amount / (Number(item.amount) || 1);
+      m = { carb: round1((item.carb || 0) * k), protein: round1((item.protein || 0) * k), fat: round1((item.fat || 0) * k) };
+    }
+    item.amount = amount;
+    item.carb = m.carb;
+    item.protein = m.protein;
+    item.fat = m.fat;
+  }
+  renderToday();
+  savePack();
+}
+
+// 点击克重 → 就地变输入框，输入精确值后回车/失焦确认，Esc 取消
+function inlineEditAmount(btn, name, idx) {
+  const meal = todayMeal(name);
+  const item = meal?.items?.[idx];
+  if (!item) return;
+  const input = document.createElement("input");
+  input.type = "number";
+  input.className = "step-value-input";
+  input.min = "0";
+  input.step = "0.1";
+  input.inputMode = "decimal";
+  input.value = item.amount;
+  btn.replaceWith(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const commit = () => {
+    if (done) return;
+    done = true;
+    const val = Number(input.value);
+    if (Number.isFinite(val) && val > 0) setFoodAmount(name, idx, val);
+    else renderToday();
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); commit(); }
+    else if (e.key === "Escape") { done = true; renderToday(); }
+  });
+  input.addEventListener("blur", commit);
+}
+
+// —— 常用餐（favoriteMeals）——
+function favoriteForMeal(mealName) {
+  const favs = state.pack.favoriteMeals || [];
+  return favs.find((f) => f.mealName === mealName);
+}
+
+// 一键把某餐的常用餐写入实际记录（优先按 id、fallback name 匹配食材库算宏量）
+function applyFavoriteToMeal(mealName) {
+  const fav = favoriteForMeal(mealName);
+  if (!fav?.ingredients?.length) return;
+  const meal = ensureMeal(mealName);
+  for (const ing of fav.ingredients) {
+    const amount = Number(ing.amount) || 0;
+    if (!amount) continue;
+    const food = findFood(ing.id) || findFood(ing.name);
+    if (food) {
+      const m = foodMacros(food, amount);
+      meal.items.push({ id: food.id, name: food.name, amount, unit: food.unit || ing.unit || "g", carb: m.carb, protein: m.protein, fat: m.fat });
+    } else {
+      meal.items.push({ id: "fav-" + Date.now() + "-" + meal.items.length, name: ing.name, amount, unit: ing.unit || "g", carb: 0, protein: 0, fat: 0 });
+    }
+  }
+  renderToday();
+  savePack();
+}
+
+// 把当前这餐已记录的内容存为（或更新）常用餐
+function saveMealAsFavorite(mealName) {
+  const meal = todayMeal(mealName);
+  const items = meal?.items || [];
+  if (!items.length) { toast("该餐还没有记录", true); return; }
+  const favs = state.pack.favoriteMeals || (state.pack.favoriteMeals = []);
+  const existing = favs.find((f) => f.mealName === mealName);
+  const ingredients = items.map((it) => ({ id: it.id, name: it.name, amount: it.amount, unit: it.unit || "g" }));
+  if (existing) {
+    existing.ingredients = ingredients;
+    if (!existing.name) existing.name = mealName + "常用";
+    toast("已更新常用餐「" + existing.name + "」");
+  } else {
+    favs.push({ id: "fav-" + Date.now(), name: mealName + "常用", mealName, ingredients });
+    toast("已存为常用餐「" + mealName + "常用」");
+  }
+  savePack();
+  renderToday();
+}
+
+function removeFavoriteMeal(id) {
+  const favs = state.pack.favoriteMeals || [];
+  state.pack.favoriteMeals = favs.filter((f) => f.id !== id);
+  savePack();
+}
+
+// 统一写入一条自定义/覆盖条目：id 为空→纯新增（生成 custom-*）；id 命中内置→覆盖；id 命中已有→更新。
+function upsertFoodEntry(input) {
+  const id = input.id || ("custom-" + Date.now());
+  const idx = state.customFoods.findIndex((f) => f.id === id);
+  const prev = idx >= 0 ? state.customFoods[idx] : null;
+  const entry = {
+    id,
+    name: input.name,
+    carb: Number(input.carb) || 0,
+    protein: Number(input.protein) || 0,
+    fat: Number(input.fat) || 0,
+    unit: input.unit || "g",
+    per: Number(input.per) || 100,
+    category: input.category || "其他",
+    note: input.note ?? prev?.note ?? "",
+  };
+  if (idx >= 0) state.customFoods[idx] = entry;
+  else state.customFoods.push(entry);
+  persistCustomFoods();
+  savePack();
+  return entry;
+}
+
+function removeCustomFood(id) {
+  state.customFoods = state.customFoods.filter((f) => f.id !== id);
+  persistCustomFoods();
+  savePack();
+}
+
+function hideFood(id) {
+  if (!state.hiddenFoods.includes(id)) state.hiddenFoods.push(id);
+  persistHidden();
+  savePack();
+}
+
+function unhideFood(id) {
+  state.hiddenFoods = state.hiddenFoods.filter((x) => x !== id);
+  persistHidden();
+  savePack();
+}
+
+function isHidden(id) { return state.hiddenFoods.includes(id); }
+function isOverridden(id) { return state.customFoods.some((f) => f.id === id && builtinIdSet().has(id)); }
+
+// 把内存中的自定义食材列表回写进 pack.foodLibrary.custom（随 savePack 存入私有云）
+function persistCustomFoods() {
+  const lib = state.pack.foodLibrary || (state.pack.foodLibrary = {});
+  lib.custom = state.customFoods.map((f) => ({ ...f }));
+}
+
+// 把隐藏的内置食材 id 回写进 pack.foodLibrary.hidden
+function persistHidden() {
+  const lib = state.pack.foodLibrary || (state.pack.foodLibrary = {});
+  lib.hidden = [...state.hiddenFoods];
 }
 
 function todayDateString() {
@@ -549,7 +839,7 @@ function renderBalance() {
   const targetKcal = Math.round(g.kcal || (g.carb * 4 + g.protein * 4 + g.fat * 9));
   const pct = targetKcal > 0 ? Math.round((eatenKcal / targetKcal) * 100) : 0;
 
-  const SEG_COLORS = { carb: "#2f6b4f", protein: "#5c8a6b", fat: "#a9b8a0" };
+  const SEG_COLORS = { carb: "var(--primary)", protein: "var(--moss)", fat: "var(--sage)" };
   const SEG_LABELS = { carb: "碳水", protein: "蛋白", fat: "脂肪" };
   const keys = ["carb", "protein", "fat"];
 
@@ -568,7 +858,7 @@ function renderBalance() {
     const frac = target > 0 ? Math.min(eaten / target, 1) : 0;
     const fill = frac * segLen;
     const start = i * seg + gap / 2;
-    const color = over ? "#e8893a" : SEG_COLORS[key];
+    const color = over ? "var(--accent)" : SEG_COLORS[key];
     segs += `<circle class="seg" cx="${CX}" cy="${CY}" r="${R}" stroke="${color}" stroke-dasharray="${fill} ${C - fill}" stroke-dashoffset="${-start}"/>`;
   });
 
@@ -596,8 +886,8 @@ function renderBalance() {
               <span class="balance-dot" style="background:${SEG_COLORS[key]}"></span>
               <span class="lbl">${SEG_LABELS[key]}</span>
               <div class="balance-bar"><div class="balance-fill ${over ? "over" : ""}" style="width:${Math.min(frac, 100)}%"></div></div>
-              <span class="num">${eaten}g / ${target}g</span>
-              <span class="delta ${over ? "over" : ""}">${over ? "+" : ""}${delta}g</span>
+              <span class="num">${fmtNum(eaten)}g / ${fmtNum(target)}g</span>
+              <span class="delta ${over ? "over" : ""}">${over ? "+" : ""}${fmtNum(delta)}g</span>
             </div>`;
         }).join("")}
       </div>
@@ -645,68 +935,292 @@ function renderWeek() {
   }
 }
 
+// ============================== 复盘控制台 ==============================
+// 方向：工业实用（Industrial）—— 暖黑底 / 火焰橙强调 / 等宽数字 / 四角括号面板。
+// 图表全部为运行时内联 SVG，零外部依赖；数据单一来源：logs + profile。
+
+const CS_DAY_MS = 86400000;
+
+function dayNumOf(date, startDate) {
+  return Math.round((new Date(date + "T12:00:00") - new Date(startDate + "T12:00:00")) / CS_DAY_MS) + 1;
+}
+
+function isReviewDay(date) { // 周六起周期，周五为复盘日
+  return new Date(date + "T12:00:00").getDay() === 5;
+}
+
+function trainingType(v) {
+  const s = String(v || "");
+  if (/休|rest/i.test(s)) return "休";
+  if (/推/.test(s)) return "推";
+  if (/拉/.test(s)) return "拉";
+  if (/蹲|腿/.test(s)) return "蹲";
+  return null;
+}
+
+// 某日实际碳蛋脂总量：遍历当日各餐 items 的宏量快照求和（含热量）
+function dayIntake(entry) {
+  const sum = { carb: 0, protein: 0, fat: 0 };
+  const meals = entry?.meals || {};
+  for (const meal of Object.values(meals)) {
+    for (const it of meal?.items || []) {
+      sum.carb += it.carb || 0;
+      sum.protein += it.protein || 0;
+      sum.fat += it.fat || 0;
+    }
+  }
+  sum.kcal = Math.round(sum.carb * 4 + sum.protein * 4 + sum.fat * 9);
+  return sum;
+}
+
+// 执行偏差（自动）：每日实际摄入 vs 目标，公式得出，无需手动记录。
+// 返回按日期倒序的偏差数组；无饮食记录的日期跳过。
+function computeDeviations(logs, goal) {
+  const rows = [];
+  if (!goal) return rows;
+  for (const [date, entry] of Object.entries(logs)) {
+    if (!entry?.meals) continue;
+    const a = dayIntake(entry);
+    if (!a.carb && !a.protein && !a.fat) continue; // 空餐跳过
+    const d = {
+      date,
+      carb: a.carb, protein: a.protein, fat: a.fat, kcal: a.kcal,
+      dCarb: round1(a.carb - goal.carb),
+      dProtein: round1(a.protein - goal.protein),
+      dFat: round1(a.fat - goal.fat),
+      dKcal: a.kcal - Math.round(goal.kcal || 0),
+    };
+    d.carbPct = goal.carb ? Math.round((d.dCarb / goal.carb) * 100) : 0;
+    d.proteinPct = goal.protein ? Math.round((d.dProtein / goal.protein) * 100) : 0;
+    d.fatPct = goal.fat ? Math.round((d.dFat / goal.fat) * 100) : 0;
+    const ps = [d.carbPct, d.proteinPct, d.fatPct];
+    // 判定：任一项 > +10% → 超量；任一项 < −10% → 不足；否则达标
+    d.status = ps.some((x) => x > 10) ? "over" : ps.some((x) => x < -10) ? "under" : "ok";
+    rows.push(d);
+  }
+  return rows.sort((a, b) => b.date.localeCompare(a.date));
+}
+
 function renderReview() {
   const view = $("#view-review");
   view.innerHTML = "";
 
-  const trendCard = el('<section class="card"><h2><i>' + icon("chart") + '</i>体重趋势</h2><div class="trend-chart"></div></section>');
-  const chart = trendCard.querySelector(".trend-chart");
-  chart.appendChild(buildTrendChart());
-  view.appendChild(trendCard);
+  const p = state.pack.profile || {};
+  const g = state.pack.goal;
+  const startDate = p.startDate || "2026-09-22";
+  const period = 90;
+  const target = Number(p.targetWeight) || 55;
 
-  const reviews = state.pack.reviews || [];
-  if (reviews.length) {
-    const reviewCard = el('<section class="card"><h2><i>' + icon("chart") + '</i>执行偏差与建议</h2><div class="reviews-holder"></div></section>');
-    const holder = reviewCard.querySelector(".reviews-holder");
-    for (const r of reviews) {
-      const item = el(`
-        <div class="review-item">
-          <div class="date">第 ${esc(r.day ?? "")} 天${r.confirmed ? " · 已确认" : ""}</div>
-          <p>${esc(r.message ?? "")}</p>
-        </div>`);
-      if (r.nextGoal) {
-        item.appendChild(el(`<div class="next-goal">下周目标：碳水 ${r.nextGoal.carb}g · 蛋白 ${r.nextGoal.protein}g · 脂肪 ${r.nextGoal.fat}g</div>`));
-      }
-      holder.appendChild(item);
-    }
-    view.appendChild(reviewCard);
-  } else {
-    view.appendChild(el('<section class="card"><h2><i>' + icon("chart") + '</i>复盘</h2><p class="empty">暂无复盘记录。完成一周后由 Agent 生成。</p></section>'));
+  const logs = state.pack.logs || {};
+  const weightEntries = Object.entries(logs).filter(([, v]) => v?.weight != null).sort(([a], [b]) => a.localeCompare(b));
+  const loggedDays = Object.keys(logs).length;
+  const weights = weightEntries.map(([, v]) => Number(v.weight));
+  const startWeight = weights.length ? weights[0] : (Number(p.weight) || 0);
+  const currentWeight = weights.length ? weights[weights.length - 1] : startWeight;
+  const lost = Math.max(0, startWeight - currentWeight);
+  const remaining = Math.max(0, currentWeight - target);
+  const pct = Math.min(100, Math.round((lost / Math.max(0.0001, startWeight - target)) * 100));
+
+  const sleeps = Object.values(logs).filter((v) => v?.sleep != null).map((v) => Number(v.sleep));
+  const avgSleep = sleeps.length ? sleeps.reduce((a, b) => a + b, 0) / sleeps.length : null;
+
+  const trainCount = { "推": 0, "拉": 0, "蹲": 0, "休": 0 };
+  let trainLogged = 0;
+  for (const v of Object.values(logs)) {
+    const t = trainingType(v?.training);
+    if (t) { trainCount[t]++; trainLogged++; }
   }
+  const strengthDays = trainCount["推"] + trainCount["拉"] + trainCount["蹲"];
+  const strengthPct = trainLogged ? Math.round((strengthDays / trainLogged) * 100) : 0;
+
+  const hungerEntries = Object.entries(logs).filter(([, v]) => v?.hunger != null).sort(([a], [b]) => a.localeCompare(b));
+  const sleepEntries = Object.entries(logs).filter(([, v]) => v?.sleep != null).sort(([a], [b]) => a.localeCompare(b));
+
+  const lastDayNum = weightEntries.length ? dayNumOf(weightEntries[weightEntries.length - 1][0], startDate) : 1;
+  const deviations = computeDeviations(logs, g);
+
+  view.appendChild(el(`
+    <section class="card">
+      <h2><i>${icon("sun")}</i>阶段目标</h2>
+      <div class="macro-grid">
+        <div class="macro-cell"><b>${g ? fmtNum(g.carb) : "—"}</b><span>碳水 g</span></div>
+        <div class="macro-cell"><b>${g ? fmtNum(g.protein) : "—"}</b><span>蛋白 g</span></div>
+        <div class="macro-cell"><b>${g ? fmtNum(g.fat) : "—"}</b><span>脂肪 g</span></div>
+        <div class="macro-cell"><b>${g ? Math.round(g.kcal) : "—"}</b><span>kcal</span></div>
+      </div>
+      <div class="fat-bar" style="margin-top:16px"><div class="fat-bar-fill" style="width:${pct}%"></div></div>
+      <div class="fat-meta">
+        <span>起点 <b>${startWeight.toFixed(2)}</b> kg</span>
+        <span>当前 <b>${currentWeight.toFixed(2)}</b> kg</span>
+        <span>目标 <b>${target}</b> kg</span>
+        <span class="fat-pct">${pct}%</span>
+      </div>
+    </section>`));
+
+  view.appendChild(el(`
+    <section class="card">
+      <h2><i>${icon("chart")}</i>体重趋势</h2>
+      <p class="hint-text" style="margin:0 0 6px">单位 kg · 琥珀点为复盘日 · 已记录 ${loggedDays} 天</p>
+      ${weightEntries.length >= 2 ? weightTrendSVG(weightEntries, startDate, currentWeight) : '<p class="empty">记录不足 2 天，暂无法绘制趋势。</p>'}
+    </section>`));
+
+  view.appendChild(el(`
+    <section class="card">
+      <h2><i>${icon("chart")}</i>睡眠 & 训练</h2>
+      <div class="review-grid2">
+        <div class="review-panel">
+          <div class="review-panel-title">每日睡眠时长</div>
+          <div class="review-panel-hint">单位 h · 目标约 7h · 均值 ${avgSleep != null ? avgSleep.toFixed(1) : "—"}h</div>
+          ${sleepEntries.length ? barsSVG(sleepEntries, "sleep", startDate, { yMax: Math.max(10, ...sleeps), gridStep: 5, color: "var(--moss)" }) : '<p class="empty">暂无睡眠记录</p>'},
+        </div>
+        <div class="review-panel">
+          <div class="review-panel-title">训练类型分布</div>
+          <div class="review-panel-hint">推 / 拉 / 蹲 / 休息 · 力量占比 ${strengthPct}%</div>
+          ${trainingDistHTML(trainCount)}
+        </div>
+      </div>
+    </section>`));
+
+  view.appendChild(el(`
+    <section class="card">
+      <h2><i>${icon("chart")}</i>饥饿感</h2>
+      <p class="hint-text" style="margin:0 0 6px">每日 1–5 · 数值越低越饱满</p>
+      ${hungerEntries.length ? barsSVG(hungerEntries, "hunger", startDate, { yMax: 5, gridStep: 2.5, color: "var(--accent)" }) : '<p class="empty">暂无饥饿感记录——在「今日 → 今日状态」填写 1-5。</p>'}
+    </section>`));
+
+  view.appendChild(el(`
+    <section class="card">
+      <h2><i>${icon("leaf")}</i>执行偏差</h2>
+      <p class="hint-text" style="margin:0 0 12px">每日实际摄入 vs 目标，自动计算 · 单项偏差 ≤±10% 记为达标</p>
+      ${deviationHTML(deviations, g, startDate)}
+    </section>`));
 }
 
-function buildTrendChart() {
-  const logs = state.pack.logs || {};
-  const entries = Object.entries(logs)
-    .filter(([, v]) => v?.weight != null)
-    .sort(([a], [b]) => a.localeCompare(b));
-
-  const wrapper = el('<div style="width:100%"></div>');
-  if (entries.length < 2) {
-    wrapper.appendChild(el('<p class="empty">' + (entries.length ? "记录不足 2 天，暂无法绘制趋势。" : "暂无体重记录。") + '</p>'));
-    return wrapper;
-  }
-
-  const weights = entries.map(([, v]) => Number(v.weight));
-  const min = Math.min(...weights);
-  const max = Math.max(...weights);
-  const range = max - min || 1;
-  const W = 640, H = 180, PAD = 24;
+// —— 体重趋势：折线 + 渐变面积 + 复盘日金点 ——
+function weightTrendSVG(entries, startDate, currentWeight) {
+  const W = 1000, H = 320, padL = 52, padR = 78, padT = 26, padB = 44;
+  const ws = entries.map(([, v]) => Number(v.weight));
   const n = entries.length;
-  const x = (i) => PAD + (i * (W - PAD * 2)) / (n - 1);
-  const y = (v) => H - PAD - ((v - min) / range) * (H - PAD * 2);
+  const min = Math.min(...ws), max = Math.max(...ws);
+  const lo = Math.floor((min - 0.15) * 10) / 10, hi = Math.ceil((max + 0.15) * 10) / 10;
+  const x = (i) => padL + (i * (W - padL - padR)) / Math.max(1, n - 1);
+  const y = (v) => padT + (1 - (v - lo) / (hi - lo)) * (H - padT - padB);
 
-  const points = entries.map(([, v], i) => `${x(i)},${y(Number(v.weight))}`).join(" ");
-  const svg = `
-    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="体重趋势图">
-      <polyline points="${points}" fill="none" stroke="#16a34a" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
-      ${entries.map(([, v], i) => `<circle cx="${x(i)}" cy="${y(Number(v.weight))}" r="3.5" fill="#16a34a"/>`).join("")}
-      ${entries.map(([date], i) => `<text x="${x(i)}" y="${H - 4}" text-anchor="middle" font-size="9" fill="#9aa49b">${date.slice(5)}</text>`).join("")}
-      <text x="${PAD}" y="${H - PAD - ((max - min) / range) * (H - PAD * 2) + 4}" font-size="10" fill="#9aa49b">${max}kg</text>
-      <text x="${PAD}" y="${H - PAD + 2}" font-size="10" fill="#9aa49b">${min}kg</text>
-    </svg>`;
-  wrapper.innerHTML = svg;
-  return wrapper;
+  let grid = "";
+  for (let i = 0; i <= 4; i++) {
+    const v = lo + ((hi - lo) * i) / 4;
+    grid += `<line x1="${padL}" y1="${y(v).toFixed(1)}" x2="${W - padR}" y2="${y(v).toFixed(1)}" stroke="var(--line)" stroke-width="1"/>
+      <text x="${padL - 10}" y="${(y(v) + 4).toFixed(1)}" text-anchor="end" class="cs-svg-tick">${v.toFixed(1)}</text>`;
+  }
+  let xlabels = "";
+  entries.forEach(([date], i) => {
+    const d = dayNumOf(date, startDate);
+    if (d === 1 || d % 4 === 0 || i === n - 1) xlabels += `<text x="${x(i).toFixed(1)}" y="${H - 12}" text-anchor="middle" class="cs-svg-tick">D${d}</text>`;
+  });
+
+  const line = entries.map(([, v], i) => `${x(i).toFixed(1)},${y(Number(v.weight)).toFixed(1)}`).join(" ");
+  const area = `M${x(0).toFixed(1)},${y(ws[0]).toFixed(1)} ` +
+    entries.map(([, v], i) => `L${x(i).toFixed(1)},${y(Number(v.weight)).toFixed(1)}`).join(" ") +
+    ` L${x(n - 1).toFixed(1)},${H - padB} L${x(0).toFixed(1)},${H - padB} Z`;
+
+  const dots = entries.map(([date, v], i) => {
+    const cx = x(i).toFixed(1), cy = y(Number(v.weight)).toFixed(1);
+    return isReviewDay(date)
+      ? `<circle cx="${cx}" cy="${cy}" r="6" fill="var(--accent)"/>`
+      : `<circle cx="${cx}" cy="${cy}" r="4" fill="var(--surface)" stroke="var(--primary)" stroke-width="2"/>`;
+  }).join("");
+
+  return `<svg viewBox="0 0 ${W} ${H}" class="cs-svg" role="img" aria-label="每日体重变化曲线">
+    <defs><linearGradient id="csWGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="var(--primary)" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="var(--primary)" stop-opacity="0"/>
+    </linearGradient></defs>
+    ${grid}${xlabels}
+    <path d="${area}" fill="url(#csWGrad)"/>
+    <polyline points="${line}" fill="none" stroke="var(--primary)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+    ${dots}
+    <text x="${(x(n - 1) + 10).toFixed(1)}" y="${(y(currentWeight) + 5).toFixed(1)}" class="cs-svg-last">${currentWeight.toFixed(2)}kg</text>
+  </svg>`;
+}
+
+// —— 通用柱状图（睡眠 / 饥饿感）——
+function barsSVG(entries, key, startDate, { yMax, gridStep, color }) {
+  const W = 560, H = 260, padL = 36, padR = 10, padT = 16, padB = 34;
+  const n = entries.length;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const slot = plotW / n;
+  const bw = Math.min(18, slot * 0.55);
+  const y = (v) => padT + (1 - v / yMax) * plotH;
+
+  let grid = "";
+  for (let g = 0; g <= yMax + 0.001; g += gridStep) {
+    grid += `<line x1="${padL}" y1="${y(g).toFixed(1)}" x2="${W - padR}" y2="${y(g).toFixed(1)}" stroke="var(--line)" stroke-width="1"/>
+      <text x="${padL - 8}" y="${(y(g) + 4).toFixed(1)}" text-anchor="end" class="cs-svg-tick">${g % 1 ? g.toFixed(1) : g}</text>`;
+  }
+  const bars = entries.map(([date, v], i) => {
+    const val = Number(v[key]) || 0;
+    const cx = padL + slot * i + slot / 2;
+    return `<rect x="${(cx - bw / 2).toFixed(1)}" y="${y(val).toFixed(1)}" width="${bw.toFixed(1)}" height="${(plotH + padT - y(val)).toFixed(1)}" rx="3" fill="${color}"/>`;
+  }).join("");
+  const labels = entries.map(([date], i) => {
+    const d = dayNumOf(date, startDate);
+    return (d % 2 === 1 || i === n - 1)
+      ? `<text x="${(padL + slot * i + slot / 2).toFixed(1)}" y="${H - 12}" text-anchor="middle" class="cs-svg-tick">D${d}</text>`
+      : "";
+  }).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" class="cs-svg" role="img" aria-label="${key === "sleep" ? "每日睡眠时长" : "每日饥饿感"}">${grid}${bars}${labels}</svg>`;
+}
+
+// —— 训练类型分布：横向条 + 图例 ——
+function trainingDistHTML(trainCount) {
+  const total = trainCount["推"] + trainCount["拉"] + trainCount["蹲"] + trainCount["休"];
+  if (!total) return '<p class="empty">暂无训练记录——在「今日 → 今日状态」选择训练类型后显示。</p>';
+  const rows = [
+    ["推", trainCount["推"], "var(--primary)"],
+    ["拉", trainCount["拉"], "var(--moss)"],
+    ["蹲", trainCount["蹲"], "var(--sage)"],
+    ["休", trainCount["休"], "var(--bg-soft)"],
+  ];
+  const max = Math.max(1, ...rows.map((r) => r[1]));
+  const body = rows.map(([label, count, color]) => `
+    <div class="cs-dist-row">
+      <span class="cs-dist-label">${label}</span>
+      <div class="cs-dist-track"><div class="cs-dist-fill" style="width:${(count / max) * 100}%;background:${color}"></div></div>
+      <span class="cs-dist-count">${count} 天</span>
+    </div>`).join("");
+  const legend = rows.map(([label, , color]) => `<span><span class="cs-legend-dot" style="background:${color}"></span>${label}</span>`).join("");
+  return `<div class="cs-dist">${body}</div><div class="cs-dist-legend">${legend}</div>`;
+}
+
+// —— 执行偏差：自动计算的实际 vs 目标，逐日列出 ——
+function deviationHTML(deviations, goal, startDate) {
+  if (!deviations.length) {
+    return '<p class="empty">暂无饮食记录。在「今日」记录四餐后，这里会自动按「实际 − 目标」算出每日碳蛋脂偏差。</p>';
+  }
+  const rows = deviations.slice(0, 14).map((d) => {
+    const day = dayNumOf(d.date, startDate);
+    const statusMap = { ok: ["达标", "ok"], over: ["超量", "over"], under: ["不足", "under"] };
+    const [statusLabel, statusCls] = statusMap[d.status] || statusMap.ok;
+    const macroRow = (label, actual, targetVal, delta, pct) => {
+      const cls = delta > 0 ? "over" : delta < 0 ? "under" : "ok";
+      const sign = delta > 0 ? "+" : "";
+      return `<span class="dev-macro ${cls}">${label} ${fmtNum(actual)} / ${fmtNum(targetVal)}g <em>${sign}${fmtNum(delta)}g · ${pct > 0 ? "+" : ""}${pct}%</em></span>`;
+    };
+    return `
+      <div class="dev-row">
+        <div class="dev-head">
+          <span class="dev-day">D${day}</span>
+          <span class="dev-date">${d.date.slice(5)}</span>
+          <span class="dev-status ${statusCls}">${statusLabel}</span>
+        </div>
+        <div class="dev-macros">
+          ${macroRow("碳水", d.carb, goal.carb, d.dCarb, d.carbPct)}
+          ${macroRow("蛋白", d.protein, goal.protein, d.dProtein, d.proteinPct)}
+          ${macroRow("脂肪", d.fat, goal.fat, d.dFat, d.fatPct)}
+        </div>
+      </div>`;
+  }).join("");
+  return `<div class="dev-list">${rows}</div>`;
 }
 
 function renderMine() {
@@ -740,10 +1254,47 @@ function renderMine() {
 
   const favs = state.pack.favoriteMeals || [];
   if (favs.length) {
-    const favCard = el('<section class="card"><h2><i>' + icon("leaf") + '</i>常用餐</h2><div class="chip-row"></div></section>');
-    for (const f of favs) favCard.querySelector(".chip-row").appendChild(el(`<span class="chip">${esc(f.name)}</span>`));
+    const favCard = el('<section class="card"><h2><i>' + icon("leaf") + '</i>常用餐</h2><div class="fav-list"></div><p class="empty">在「今日」页某餐点「存为常用餐」新增或更新；点「记入」一键填回当天记录。</p></section>');
+    const holder = favCard.querySelector(".fav-list");
+    favs.forEach((f) => {
+      const summary = (f.ingredients || []).map((i) => `${esc(i.name)} ${i.amount}${i.unit}`).join(" · ");
+      const row = el(`
+        <div class="foodlib-item">
+          <div class="foodlib-item-info">
+            <b>${esc(f.name)}</b>
+            <span class="foodlib-macros"><small>${esc(f.mealName)}</small> · ${summary}</span>
+          </div>
+          <div class="foodlib-item-actions">
+            <button class="text-button fav-del" type="button" data-id="${esc(f.id)}">删除</button>
+          </div>
+        </div>`);
+      row.querySelector(".fav-del").addEventListener("click", () => {
+        if (window.confirm("确定删除常用餐「" + f.name + "」？")) {
+          removeFavoriteMeal(f.id);
+          renderMine();
+          toast("已删除「" + f.name + "」");
+        }
+      });
+      holder.appendChild(row);
+    });
     view.appendChild(favCard);
   }
+
+  const pureCustom = state.customFoods.filter((c) => !builtinIdSet().has(c.id));
+  const builtinCount = state.foodDb.length;
+  const customCount = pureCustom.length;
+  const overrideCount = state.customFoods.length - customCount;
+  const hiddenCount = state.hiddenFoods.length;
+  const libSummary = `内置 ${builtinCount} 个 + 自定义 ${customCount} 个` + (overrideCount ? `（已覆盖 ${overrideCount} 个）` : "") + (hiddenCount ? `（已隐藏 ${hiddenCount} 个）` : "");
+  const foodLibCard = el(`
+    <section class="card">
+      <h2><i>${icon("leaf")}</i>食材库</h2>
+      <p class="empty">${libSummary}。可覆盖内置碳蛋脂、隐藏不想要的、增改删自定义，全部保存在你的私有云端。</p>
+      ${customCount ? `<div class="chip-row" style="margin-bottom:14px">${pureCustom.slice(0, 8).map((f) => `<span class="chip">${esc(f.name)}</span>`).join("")}${customCount > 8 ? `<span class="chip">+${customCount - 8}</span>` : ""}</div>` : ""}
+      <button class="add-food-btn open-foodlib-btn" type="button">管理食材库（覆盖 / 隐藏 / 增改删）</button>
+    </section>`);
+  foodLibCard.querySelector(".open-foodlib-btn").addEventListener("click", openCustomFoodLibrary);
+  view.appendChild(foodLibCard);
 
   view.appendChild(el(`
     <section class="card">
@@ -797,8 +1348,9 @@ function openFoodPicker(mealName) {
     <div class="picker-footer">
       <label class="picker-grams-label"><span class="picker-unit">克数</span> <input class="picker-grams" type="number" min="1" step="1" value="100"></label>
       <span class="picker-selected-hint">未选择食材</span>
+      <button class="text-button picker-custom" type="button">＋ 新增</button>
       <button class="text-button primary-action picker-add" type="button" disabled>加入</button>
-      <button class="text-button picker-custom" type="button">自定义食材</button>
+      <button class="text-button picker-manage" type="button">管理库</button>
     </div>`;
   document.body.appendChild(dlg);
 
@@ -823,6 +1375,10 @@ function openFoodPicker(mealName) {
   });
 
   dlg.querySelector(".picker-custom").addEventListener("click", () => openCustomFoodForm(dlg));
+  dlg.querySelector(".picker-manage").addEventListener("click", () => {
+    dlg.close();
+    openCustomFoodLibrary();
+  });
 
   dlg.showModal();
 }
@@ -833,7 +1389,7 @@ function renderPickerList(dlg, query, cat) {
   list.innerHTML = "";
   catBox.innerHTML = "";
 
-  const cats = ["全部", ...Array.from(new Set(allFoods().map((f) => f.category)))];
+  const cats = ["全部", ...FOOD_TYPES];
   cats.forEach((c) => {
     const chip = el(`<button class="chip cat-chip ${c === cat ? "active" : ""}" type="button">${c}</button>`);
     chip.addEventListener("click", () => {
@@ -844,7 +1400,7 @@ function renderPickerList(dlg, query, cat) {
   });
 
   let foods = allFoods();
-  if (cat && cat !== "全部") foods = foods.filter((f) => f.category === cat);
+  if (cat && cat !== "全部") foods = foods.filter((f) => foodType(f) === cat);
   if (query) {
     const q = query.toLowerCase();
     foods = foods.filter((f) => f.name.toLowerCase().includes(q) || (f.id || "").toLowerCase().includes(q));
@@ -870,29 +1426,59 @@ function renderPickerList(dlg, query, cat) {
     list.appendChild(item);
   });
 
-  if (!foods.length) list.appendChild(el('<p class="empty">无匹配食材，点「自定义食材」添加。</p>'));
+  if (!foods.length) list.appendChild(el('<p class="empty">无匹配食材，点「＋ 新增」录入，或「管理库」调整。</p>'));
 }
 
-function openCustomFoodForm(parentDlg) {
+function openCustomFoodForm(parentDlg, editingFood) {
   const dlg = document.createElement("dialog");
   dlg.className = "food-picker custom-form";
+  const isEdit = !!editingFood;
+  const isBuiltin = isEdit && builtinIdSet().has(editingFood.id);
+  const src = editingFood ? { ...editingFood, unit: editingFood.unit || "g", per: editingFood.per || 100 } : null;
+  const v = (key, fallback) => src ? String(src[key] ?? "") : fallback;
+  const title = isEdit ? (isBuiltin ? "覆盖内置食材" : "编辑自定义食材") : "新增食材";
+  const kicker = isBuiltin ? "OVERRIDE BUILT-IN" : "CUSTOM FOOD";
+  const selType = src ? foodType(src) : "其他";
   dlg.innerHTML = `
     <div class="dialog-head">
-      <div><span class="section-kicker">CUSTOM FOOD</span><h2>自定义食材</h2></div>
+      <div><span class="section-kicker">${kicker}</span><h2>${title}</h2></div>
       <button class="icon-button" type="button" aria-label="关闭">×</button>
     </div>
     <div class="custom-form-body">
-      <label>名称 <input class="cf-name" type="text" placeholder="如 蛋白棒"></label>
+      <label>名称 <input class="cf-name" type="text" placeholder="如 蛋白棒" value="${esc(v("name", ""))}"></label>
       <div class="custom-macros">
-        <label>碳水 g <input class="cf-carb" type="number" min="0" step="0.1" placeholder="每100g"></label>
-        <label>蛋白 g <input class="cf-protein" type="number" min="0" step="0.1"></label>
-        <label>脂肪 g <input class="cf-fat" type="number" min="0" step="0.1"></label>
+        <label>碳水 g <input class="cf-carb" type="number" min="0" step="0.1" placeholder="每100g" value="${esc(v("carb", ""))}"></label>
+        <label>蛋白 g <input class="cf-protein" type="number" min="0" step="0.1" value="${esc(v("protein", ""))}"></label>
+        <label>脂肪 g <input class="cf-fat" type="number" min="0" step="0.1" value="${esc(v("fat", ""))}"></label>
       </div>
-      <p class="hint-text">按每 100g 碳蛋脂填写（看包装营养成分表）。</p>
+      <div class="custom-unit-row">
+        <label>单位
+          <select class="cf-unit">
+            <option value="g" ${src?.unit === "g" ? "selected" : ""}>克 (g)</option>
+            <option value="ml" ${src?.unit === "ml" ? "selected" : ""}>毫升 (ml)</option>
+            <option value="个" ${src?.unit === "个" ? "selected" : ""}>个</option>
+          </select>
+        </label>
+        <label>基准量
+          <select class="cf-per">
+            <option value="100" ${src?.per === 100 ? "selected" : ""}>每 100 g/ml</option>
+            <option value="1" ${src?.per === 1 ? "selected" : ""}>每 1 个</option>
+          </select>
+        </label>
+      </div>
+      ${!isBuiltin ? `
+      <div class="custom-unit-row">
+        <label>类型
+          <select class="cf-category">
+            ${FOOD_TYPES.map((t) => `<option value="${t}" ${t === selType ? "selected" : ""}>${t}</option>`).join("")}
+          </select>
+        </label>
+      </div>` : ""}
+      <p class="hint-text">${isBuiltin ? "修改会覆盖内置值（存私有云），可随时「还原」恢复内置原值。" : "按包装营养成分表填写每 100g（或每份）的碳蛋脂。"}</p>
     </div>
     <div class="dialog-footer">
       <button class="text-button cf-cancel" type="button">取消</button>
-      <button class="text-button primary-action cf-save" type="button">保存</button>
+      <button class="text-button primary-action cf-save" type="button">${isEdit ? "保存修改" : "保存"}</button>
     </div>`;
   document.body.appendChild(dlg);
   dlg.querySelector(".dialog-head .icon-button").addEventListener("click", () => dlg.close());
@@ -903,12 +1489,153 @@ function openCustomFoodForm(parentDlg) {
     const carb = dlg.querySelector(".cf-carb").value;
     const protein = dlg.querySelector(".cf-protein").value;
     const fat = dlg.querySelector(".cf-fat").value;
+    const unit = dlg.querySelector(".cf-unit").value;
+    const per = Number(dlg.querySelector(".cf-per").value) || 100;
+    const category = isBuiltin ? editingFood.category : dlg.querySelector(".cf-category").value;
     if (!name) { toast("请输入名称", true); return; }
-    addCustomFood(name, carb, protein, fat);
+    upsertFoodEntry({ id: editingFood?.id, name, carb, protein, fat, unit, per, category });
+    toast(isBuiltin ? "已覆盖「" + name + "」" : (isEdit ? "已更新「" + name + "」" : "已保存「" + name + "」"));
     dlg.close();
-    parentDlg.close();
-    toast("已保存「" + name + "」，重新打开「添加食材」即可选择");
+    refreshParent(parentDlg);
   });
+  dlg.showModal();
+}
+
+// 保存后按父窗口类型刷新：食材库刷新列表；食物选择器刷新列表并保持打开
+function refreshParent(parentDlg) {
+  if (!parentDlg) return;
+  if (parentDlg.querySelector(".foodlib-list")) {
+    parentDlg.dispatchEvent(new CustomEvent("foodlib-refresh"));
+  } else if (parentDlg.querySelector(".picker-list")) {
+    renderPickerList(parentDlg, parentDlg.querySelector(".picker-search").value.trim(), parentDlg.dataset.cat);
+  } else {
+    parentDlg.close();
+  }
+}
+
+// 食材库管理：系统内置 + 自定义食材，统一增 / 改 / 删 / 隐藏（改动存私有云）
+function openCustomFoodLibrary() {
+  const dlg = document.createElement("dialog");
+  dlg.className = "food-picker food-library";
+  dlg.innerHTML = `
+    <div class="dialog-head">
+      <div><span class="section-kicker">FOOD LIBRARY</span><h2>食材库</h2></div>
+      <button class="icon-button" type="button" aria-label="关闭">×</button>
+    </div>
+    <div class="foodlib-body">
+      <p class="hint-text">内置食材可「覆盖」碳蛋脂、可「隐藏」不想要的；自定义食材可增改删。改动都存私有云。</p>
+      <div class="foodlib-filter"></div>
+      <div class="foodlib-section-label">系统内置食材</div>
+      <div class="foodlib-list foodlib-builtin"></div>
+      <div class="foodlib-section-label">我的自定义食材</div>
+      <div class="foodlib-list foodlib-custom"></div>
+    </div>
+    <div class="dialog-footer">
+      <button class="text-button foodlib-add" type="button">＋ 新增食材</button>
+      <button class="text-button primary-action foodlib-done" type="button">完成</button>
+    </div>`;
+  document.body.appendChild(dlg);
+  dlg.querySelector(".dialog-head .icon-button").addEventListener("click", () => dlg.close());
+  dlg.querySelector(".foodlib-done").addEventListener("click", () => dlg.close());
+  dlg.addEventListener("close", () => { dlg.remove(); if (state.tab === "mine") renderMine(); });
+  dlg.addEventListener("foodlib-refresh", renderList);
+  dlg.querySelector(".foodlib-add").addEventListener("click", () => openCustomFoodForm(dlg, null));
+  let filterType = "全部";
+
+  function macroText(f) {
+    return isZeroMacro(f) ? "不计碳蛋脂" : `碳 ${fmtNum(f.carb)} · 蛋 ${fmtNum(f.protein)} · 脂 ${fmtNum(f.fat)} ${perLabel(f)}`;
+  }
+
+  function renderList() {
+    const builtinList = dlg.querySelector(".foodlib-builtin");
+    const customList = dlg.querySelector(".foodlib-custom");
+    builtinList.innerHTML = "";
+    customList.innerHTML = "";
+
+    // —— 类型筛选 chips ——
+    const filterBox = dlg.querySelector(".foodlib-filter");
+    filterBox.innerHTML = "";
+    ["全部", ...FOOD_TYPES].forEach((t) => {
+      const chip = el(`<button class="chip cat-chip ${t === filterType ? "active" : ""}" type="button">${t}</button>`);
+      chip.addEventListener("click", () => { filterType = t; renderList(); });
+      filterBox.appendChild(chip);
+    });
+
+    // —— 内置食材（含已覆盖 / 已隐藏状态，可编辑覆盖、隐藏、还原）——
+    const overrideById = {};
+    for (const c of state.customFoods) if (builtinIdSet().has(c.id)) overrideById[c.id] = c;
+
+    state.foodDb.forEach((f) => {
+      if (filterType !== "全部" && foodType(f) !== filterType) return;
+      const ov = overrideById[f.id];
+      const hidden = isHidden(f.id);
+      const name = ov ? ov.name : f.name;
+      const shown = ov || f;
+      const tags = [];
+      if (ov) tags.push('<span class="tag tag-override">已覆盖</span>');
+      if (hidden) tags.push('<span class="tag tag-hidden">已隐藏</span>');
+      const row = el(`
+        <div class="foodlib-item ${hidden ? "is-hidden" : ""}">
+          <div class="foodlib-item-info">
+            <b>${esc(name)} ${tags.join("")}</b>
+            <span class="foodlib-macros">${macroText(shown)} <small>${foodType(f)}</small></span>
+          </div>
+          <div class="foodlib-item-actions">
+            <button class="text-button foodlib-edit" type="button" data-id="${esc(f.id)}">编辑</button>
+            ${ov ? `<button class="text-button foodlib-restore" type="button" data-id="${esc(f.id)}">还原</button>` : ""}
+            <button class="text-button foodlib-hide" type="button" data-id="${esc(f.id)}">${hidden ? "恢复" : "隐藏"}</button>
+          </div>
+        </div>`);
+      row.querySelector(".foodlib-edit").addEventListener("click", () => openCustomFoodForm(dlg, ov || f));
+      if (ov) {
+        row.querySelector(".foodlib-restore").addEventListener("click", () => {
+          removeCustomFood(f.id);
+          renderList();
+          toast("已还原「" + f.name + "」为内置原值");
+        });
+      }
+      row.querySelector(".foodlib-hide").addEventListener("click", () => {
+        if (hidden) { unhideFood(f.id); toast("已恢复「" + name + "」"); }
+        else { hideFood(f.id); toast("已隐藏「" + name + "」"); }
+        renderList();
+      });
+      builtinList.appendChild(row);
+    });
+    if (!builtinList.children.length) {
+      builtinList.appendChild(el('<p class="empty">' + (filterType === "全部" ? "内置食材为空。" : "该类型暂无内置食材。") + '</p>'));
+    }
+
+    // —— 自定义食材（纯新增，可编辑 / 删除）——
+    let pureCustom = state.customFoods.filter((c) => !builtinIdSet().has(c.id));
+    if (filterType !== "全部") pureCustom = pureCustom.filter((f) => foodType(f) === filterType);
+    if (!pureCustom.length) {
+      customList.appendChild(el('<p class="empty">' + (filterType === "全部" ? "暂无自定义食材，点「＋ 新增食材」录入。" : "该类型暂无自定义食材。") + '</p>'));
+    }
+    pureCustom.forEach((f) => {
+      const row = el(`
+        <div class="foodlib-item">
+          <div class="foodlib-item-info">
+            <b>${esc(f.name)}</b>
+            <span class="foodlib-macros">${macroText(f)} <small>${foodType(f)}</small></span>
+          </div>
+          <div class="foodlib-item-actions">
+            <button class="text-button foodlib-edit" type="button" data-id="${esc(f.id)}">编辑</button>
+            <button class="text-button foodlib-del" type="button" data-id="${esc(f.id)}">删除</button>
+          </div>
+        </div>`);
+      row.querySelector(".foodlib-edit").addEventListener("click", () => openCustomFoodForm(dlg, f));
+      row.querySelector(".foodlib-del").addEventListener("click", () => {
+        if (window.confirm("确定删除「" + f.name + "」？已记录的历史餐单不受影响。")) {
+          removeCustomFood(f.id);
+          renderList();
+          toast("已删除「" + f.name + "」");
+        }
+      });
+      customList.appendChild(row);
+    });
+  }
+
+  renderList();
   dlg.showModal();
 }
 
@@ -923,6 +1650,37 @@ function buildTabs() {
 function setupNav() {
   document.querySelectorAll(".module-nav button").forEach((btn) => {
     btn.addEventListener("click", () => { state.tab = btn.dataset.tab; render(); });
+  });
+}
+
+// 风格切换（右上角三选一胶囊）。初始读取 localStorage，点击切换 + 持久化。
+const THEME_KEY = "fatloss_theme";
+const THEMES = ["organic", "industrial", "editorial"];
+
+function applyTheme(theme) {
+  if (!THEMES.includes(theme)) theme = "organic";
+  document.documentElement.dataset.theme = theme;
+  document.querySelectorAll("#themeSwitch button[data-theme-value]").forEach((b) => {
+    b.classList.toggle("active", b.dataset.themeValue === theme);
+  });
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", themeMetaColor(theme));
+  try { localStorage.setItem(THEME_KEY, theme); } catch (_) { /* 隐私模式 / 受限：忽略 */ }
+}
+
+function themeMetaColor(theme) {
+  return theme === "industrial" ? "#0e0d0c" : theme === "editorial" ? "#faf6ef" : "#f6f1e7";
+}
+
+function setupTheme() {
+  let stored = null;
+  try { stored = localStorage.getItem(THEME_KEY); } catch (_) {}
+  applyTheme(stored);
+  const switchEl = $("#themeSwitch");
+  if (!switchEl) return;
+  switchEl.addEventListener("click", (event) => {
+    const btn = event.target.closest("button[data-theme-value]");
+    if (!btn) return;
+    applyTheme(btn.dataset.themeValue);
   });
 }
 
@@ -988,6 +1746,7 @@ function openDialogForImport() {
 
 async function init() {
   hydrateIcons();
+  setupTheme();
   state.mode = detectMode();
   state.endpoint = buildEndpoint();
   const badge = $("#accessBadge");

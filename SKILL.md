@@ -1,6 +1,6 @@
 ---
 name: fatloss-workbench
-description: Collect profile and health screening, let the user pick one of three Tan-Shi fat-loss methods (lifestyle / carb-cycle / recomposition, non-mixable), compute daily macro targets by the chosen method, generate a weekly meal plan with shopping list, guide daily intake logging and 7-day review with method-specific adjustments, validate the FatLossPack, and persist it to the cloud (editable + read-only share link) with a local JSON fallback. Excludes medical diagnosis, inventory/fridge, social, payment, training prescription, and coach chat.
+description: Collect profile and health screening, let the user pick one of three Tan-Shi fat-loss methods (lifestyle / carb-cycle / recomposition, non-mixable), compute daily macro targets by the chosen method, generate a weekly meal plan with shopping list, provide a customizable food library (override/hide built-ins, add custom foods, 6-type filter), support fast daily logging via favorite meals and per-ingredient steppers, auto-compute daily intake deviations in the 7-day review, validate the FatLossPack, and persist it to the cloud (editable + read-only share link) with a local JSON fallback. The deployable frontend ships three switchable themes (organic / industrial / editorial). Excludes medical diagnosis, inventory/fridge, social, payment, training prescription, and coach chat.
 author: "VanF"
 ---
 
@@ -17,13 +17,13 @@ author: "VanF"
    - 年前碳水循环：阶段表 + 高碳日（[methods/carb-cycle.md](references/methods/carb-cycle.md)），需明确起止日与每阶段天数。
    - 增肌减脂并行：范围内起始值 + 波形调整（[methods/recomposition.md](references/methods/recomposition.md)）。
 4. **周餐单 + 采购清单**：先征询口味偏好（忌口 / 替换 / 份量 / 特殊日），再按 [执行流程](references/workflow.md) 与 [轻量食物表](references/food-table.md) 生成七日餐单（食材替换、备餐批做），输出采购清单。**确认闸**：用户确认餐单后再继续。
-5. **记录与复盘**：给每日记录说明（[review.md](references/review.md)），每 7 天综合复盘，按方法口径给下周调整并写入 `nextGoal`。同次碳水调整不叠加；阶段体重降 ≥3% 才全量重算。
+5. **记录与复盘**：给每日记录说明（[review.md](references/review.md)）。前端记录支持三种便捷方式：常用餐一键记入（`favoriteMeals`，食材只存份量不存宏量快照）、食材行步进器（−/克数/＋，按单位定步长，点击克数可精确输入）、按计划计入。复盘页的执行偏差由「实际摄入 vs 目标」公式自动算出（>±10% 标超量/不足），无需手动填写。每 7 天综合复盘，按方法口径给下周调整并写入 `nextGoal`。同次碳水调整不叠加；阶段体重降 ≥3% 才全量重算。
 6. **校验**：输出完整 `FatLossPack` JSON，运行：
    ```bash
    node scripts/validate_fatlosspack.mjs <fatlosspack.json>
    ```
    未通过不得交付。
-7. **交付**：本 skill 内置可部署前端站点（`assets/frontend-template/`）+ 后端模板（`assets/backend-template/`）。先按 [云端存储接入](references/cloud-storage.md) 做能力发现，载体顺序为 **Cloudflare standard-cloud → WorkBuddy Cloud Service → 本地 JSON**。部署 Cloudflare 时：前端静态资源 + `worker.js`（D1 建 `schema.sql`），回传编辑链接 `/e/{token}` + 只读链接 `/r/{token}`；走 WorkBuddy Cloud Service 时激活云库并注入 `window.FATLOSS_HOST_ADAPTER`。四项产品结果不全或用户要求本地时，转 [交付与云端路由](references/deliverables.md) 的本地 `FatLossPack.json` 兜底。部署后用户可在浏览器随时访问工作台：记录四餐、看每日目标、看计划饮食、复盘更新进度。正式部署时在网站根目录发布 `fatloss-app-manifest.json`（用 `scripts/build_deployment_manifest.mjs` 生成），为后续升级提供可信清单。
+7. **交付**：本 skill 内置可部署前端站点（`assets/frontend-template/`）+ 后端模板（`assets/backend-template/`）。先按 [云端存储接入](references/cloud-storage.md) 做能力发现，载体顺序为 **Cloudflare standard-cloud → WorkBuddy Cloud Service → 本地 JSON**。部署 Cloudflare 时：前端静态资源 + `worker.js`（D1 建 `schema.sql`），回传编辑链接 `/e/{token}` + 只读链接 `/r/{token}`；走 WorkBuddy Cloud Service 时激活云库并注入 `window.FATLOSS_HOST_ADAPTER`。四项产品结果不全或用户要求本地时，转 [交付与云端路由](references/deliverables.md) 的本地 `FatLossPack.json` 兜底。部署后用户可在浏览器随时访问工作台：记录四餐、看每日目标、看计划饮食、复盘更新进度。前端内置三套可切换设计风格（有机 / 仪表 / 杂志，见 [主题规范](references/frontend-theming.md)），顶栏右上角一键切换并本地记忆。正式部署时在网站根目录发布 `fatloss-app-manifest.json`（用 `scripts/build_deployment_manifest.mjs` 生成），为后续升级提供可信清单。
 
 ## 更新现有计划
 
