@@ -96,6 +96,24 @@ async function cloudFetch(resource, options = {}) {
   }
 }
 
+// 通过宿主 adapter 调用云端大模型（免密钥）。宿主未提供该能力时抛错，由调用方降级提示。
+async function callLlm(messages, options = {}) {
+  const hostAdapter = window.FATLOSS_HOST_ADAPTER || null;
+  if (!hostAdapter) {
+    throw Object.assign(new Error("当前是本地模式，云端大模型不可用"), { code: "no_cloud" });
+  }
+  const adapter = createFatLossHostAdapter(hostAdapter);
+  if (typeof adapter.llm !== "function") {
+    throw Object.assign(new Error("当前宿主未提供大模型通道"), { code: "no_llm" });
+  }
+  return adapter.llm({
+    messages,
+    onDelta: options.onDelta,
+    temperature: options.temperature,
+    signal: options.signal,
+  });
+}
+
 function detectMode() {
   if (window.FATLOSS_HOST_ADAPTER) return window.FATLOSS_HOST_ADAPTER.mode === "read" ? "read" : "edit";
   const path = window.location.pathname;
@@ -391,42 +409,76 @@ function renderToday() {
     holder.appendChild(renderMealRow(name));
   }
 
-  // 额外记录项（体重/睡眠/训练/饥饿感/备注）
+  // 额外记录项（体重/睡眠/训练时长/饥饿感）——先填草稿，显式提交才落库
   const extraRow = el(`
     <div class="meal-row">
       <div class="meal-row-head"><b>今日状态</b><span>复盘用</span></div>
-      <div class="meal-macros cols-4">
-        <label>体重 kg<input type="number" min="0" step="0.1" data-extra="weight"></label>
-        <label>睡眠 h<input type="number" min="0" step="0.5" data-extra="sleep"></label>
-        <label>训练<select data-extra="training">
+      <div class="meal-macros cols-5">
+        <label>体重 kg<input type="number" min="0" step="0.1" data-extra="weight" placeholder="—"></label>
+        <label>睡眠 h<input type="number" min="0" step="0.5" data-extra="sleep" placeholder="—"></label>
+        <label>训练 min<input type="number" min="0" step="5" data-extra="trainingMin" placeholder="如 60"></label>
+        <label>训练感受<select data-extra="trainingFeel">
           <option value="">未记录</option>
-          <option value="推">推</option>
-          <option value="拉">拉</option>
-          <option value="蹲">蹲</option>
-          <option value="休息">休息</option>
+          <option value="有力">有力</option>
+          <option value="一般">一般</option>
+          <option value="乏力">乏力</option>
         </select></label>
-        <label>饥饿 1-5<input type="number" min="1" max="5" step="1" data-extra="hunger"></label>
+        <label>饥饿 1-5<input type="number" min="1" max="5" step="1" data-extra="hunger" placeholder="—"></label>
+      </div>
+      <div class="status-submit-row">
+        <span class="status-submit-hint">填好后点右侧提交，写入今日记录并同步云端。</span>
+        <button class="text-button primary-action status-submit-btn" type="button">提交今日状态</button>
       </div>
     </div>`);
   if (today) {
     extraRow.querySelector('[data-extra="weight"]').value = today.weight ?? "";
     extraRow.querySelector('[data-extra="sleep"]').value = today.sleep ?? "";
     extraRow.querySelector('[data-extra="hunger"]').value = today.hunger ?? "";
-    // 历史训练值可能是自由文本：不在选项中时补一个选项再回显
-    if (today.training) {
-      const tSel = extraRow.querySelector('[data-extra="training"]');
-      const v = String(today.training);
-      if (![...tSel.options].some((o) => o.value === v)) tSel.appendChild(el(`<option value="${esc(v)}">${esc(v)}</option>`));
-      tSel.value = v;
-    }
+    extraRow.querySelector('[data-extra="trainingMin"]').value = today.trainingMin ?? "";
+    extraRow.querySelector('[data-extra="trainingFeel"]').value = today.trainingFeel ?? "";
   }
-  extraRow.querySelectorAll("input").forEach((input) => {
-    input.addEventListener("change", async () => {
-      ensureTodayLog();
-      const entry = todayLog();
-      entry[input.dataset.extra] = input.value === "" ? undefined : Number(input.value) || input.value;
-      await savePack();
-    });
+
+  const statusInputs = [...extraRow.querySelectorAll("[data-extra]")];
+  const submitBtn = extraRow.querySelector(".status-submit-btn");
+  const submitHint = extraRow.querySelector(".status-submit-hint");
+  const readDraft = () => Object.fromEntries(statusInputs.map((i) => [i.dataset.extra, i.value.trim()]));
+  let committed = readDraft();
+
+  const refreshSubmitState = () => {
+    const dirty = JSON.stringify(readDraft()) !== JSON.stringify(committed);
+    submitBtn.classList.toggle("is-dirty", dirty);
+    submitBtn.textContent = dirty ? "提交今日状态 ·" : "提交今日状态";
+    submitHint.textContent = dirty
+      ? "有未提交的修改"
+      : "填好后点右侧提交，写入今日记录并同步云端。";
+    return dirty;
+  };
+
+  statusInputs.forEach((input) => {
+    input.addEventListener("input", refreshSubmitState);
+    input.addEventListener("change", refreshSubmitState);
+  });
+
+  submitBtn.addEventListener("click", async () => {
+    const draft = readDraft();
+    if (!refreshSubmitState()) { toast("今日状态没有改动"); return; }
+    ensureTodayLog();
+    const entry = todayLog();
+    for (const [key, raw] of Object.entries(draft)) {
+      if (raw === "") { delete entry[key]; continue; }
+      const num = Number(raw);
+      entry[key] = Number.isFinite(num) ? num : raw;
+    }
+    await savePack();
+    committed = readDraft();
+    submitBtn.classList.remove("is-dirty");
+    submitBtn.textContent = "已提交 ✓";
+    submitHint.textContent = "已写入今日记录";
+    toast("今日状态已提交");
+    setTimeout(() => {
+      if (!submitBtn.isConnected) return;
+      submitBtn.textContent = "提交今日状态";
+    }, 1800);
   });
   holder.appendChild(extraRow);
 
@@ -762,6 +814,87 @@ function removeFavoriteMeal(id) {
   savePack();
 }
 
+// 编辑常用餐：改名 + 调整每样食材份量 + 删除食材
+function openFavoriteEditor(id) {
+  const favs = state.pack.favoriteMeals || [];
+  const fav = favs.find((f) => f.id === id);
+  if (!fav) return;
+
+  const dlg = document.createElement("dialog");
+  dlg.className = "food-picker fav-editor";
+  dlg.innerHTML = `
+    <div class="dialog-head">
+      <div><span class="section-kicker">EDIT FAVORITE</span><h2>编辑常用餐</h2></div>
+      <button class="icon-button" type="button" aria-label="关闭">×</button>
+    </div>
+    <div class="fav-editor-body">
+      <label class="fav-editor-name">名称<input type="text" class="fav-name-input" maxlength="24" value="${esc(fav.name)}"></label>
+      <div class="fav-editor-hint">归属「${esc(fav.mealName)}」 · 可调份量或删除食材，改完点保存。</div>
+      <div class="fav-editor-list"></div>
+    </div>
+    <footer class="dialog-footer">
+      <button class="text-button fav-editor-cancel" type="button">取消</button>
+      <button class="text-button primary-action fav-editor-save" type="button">保存</button>
+    </footer>`;
+  document.body.appendChild(dlg);
+  dlg.querySelector(".dialog-head .icon-button").addEventListener("click", () => dlg.close());
+  dlg.addEventListener("close", () => dlg.remove());
+
+  const list = dlg.querySelector(".fav-editor-list");
+  const rows = (fav.ingredients || []).map((ing) => ({ ...ing }));
+
+  const renderRows = () => {
+    list.innerHTML = "";
+    if (!rows.length) {
+      list.appendChild(el('<p class="empty">食材已清空，保存后这份常用餐将不含任何食材。</p>'));
+      return;
+    }
+    rows.forEach((ing, idx) => {
+      const row = el(`
+        <div class="fav-editor-row">
+          <span class="fav-editor-row-name">${esc(ing.name)}</span>
+          <div class="stepper">
+            <button class="step-btn fe-minus" type="button" aria-label="减少${esc(ing.name)}">−</button>
+            <input class="fe-amount" type="number" min="0" step="1" value="${ing.amount}" aria-label="${esc(ing.name)}份量">
+            <span class="fe-unit">${esc(ing.unit || "g")}</span>
+            <button class="step-btn fe-plus" type="button" aria-label="增加${esc(ing.name)}">＋</button>
+          </div>
+          <button class="meal-item-del fe-del" type="button" aria-label="删除${esc(ing.name)}">×</button>
+        </div>`);
+      row.querySelector(".fe-amount").addEventListener("input", (e) => { rows[idx].amount = Number(e.target.value) || 0; });
+      row.querySelector(".fe-minus").addEventListener("click", () => {
+        rows[idx].amount = round1(Math.max(0, (Number(rows[idx].amount) || 0) - stepFor(rows[idx].unit)));
+        renderRows();
+      });
+      row.querySelector(".fe-plus").addEventListener("click", () => {
+        rows[idx].amount = round1((Number(rows[idx].amount) || 0) + stepFor(rows[idx].unit));
+        renderRows();
+      });
+      row.querySelector(".fe-del").addEventListener("click", () => { rows.splice(idx, 1); renderRows(); });
+      list.appendChild(row);
+    });
+  };
+  renderRows();
+
+  dlg.querySelector(".fav-editor-cancel").addEventListener("click", () => dlg.close());
+  dlg.querySelector(".fav-editor-save").addEventListener("click", async () => {
+    const name = dlg.querySelector(".fav-name-input").value.trim();
+    if (!name) { toast("名称不能为空", true); return; }
+    const target = favs.find((f) => f.id === id);
+    if (!target) return;
+    target.name = name;
+    target.ingredients = rows
+      .filter((r) => Number(r.amount) > 0)
+      .map((r) => ({ id: r.id, name: r.name, amount: r.amount, unit: r.unit || "g" }));
+    await savePack();
+    dlg.close();
+    renderMine();
+    toast("已保存常用餐「" + name + "」");
+  });
+
+  dlg.showModal();
+}
+
 // 统一写入一条自定义/覆盖条目：id 为空→纯新增（生成 custom-*）；id 命中内置→覆盖；id 命中已有→更新。
 function upsertFoodEntry(input) {
   const id = input.id || ("custom-" + Date.now());
@@ -949,15 +1082,6 @@ function isReviewDay(date) { // 周六起周期，周五为复盘日
   return new Date(date + "T12:00:00").getDay() === 5;
 }
 
-function trainingType(v) {
-  const s = String(v || "");
-  if (/休|rest/i.test(s)) return "休";
-  if (/推/.test(s)) return "推";
-  if (/拉/.test(s)) return "拉";
-  if (/蹲|腿/.test(s)) return "蹲";
-  return null;
-}
-
 // 某日实际碳蛋脂总量：遍历当日各餐 items 的宏量快照求和（含热量）
 function dayIntake(entry) {
   const sum = { carb: 0, protein: 0, fat: 0 };
@@ -1001,6 +1125,402 @@ function computeDeviations(logs, goal) {
   return rows.sort((a, b) => b.date.localeCompare(a.date));
 }
 
+// ==========================================================================
+// 复盘引擎：把 review.md 的判定规则代码化（确定性，不调用大模型）
+// 口径来源 references/methods/*.md 与 references/review.md
+// ==========================================================================
+
+// 判定阈值（写入文档时必须与此一致）
+const TARGET_DROP_PCT = 1.0;   // 每周理想降幅；低于此值说明偏慢
+const FAST_DROP_PCT = 1.5;     // 每周降幅超过此值说明过快，触发保护性加碳水
+const STAGE_RESET_PCT = 3.0;   // 阶段累计降幅达到此值 → 按新体重全量重算
+
+// 生活化减脂系数：[碳水, 蛋白, 脂肪] g/kg，按每周运动时长分档
+// <4h→档1，<6h→档2，<8h→档3，否则档4（与 lifestyle.md 一致，不外推）
+const LIFESTYLE_COEF = {
+  male:   [[2.2, 1.4, 0.8], [2.5, 1.6, 0.9], [3.0, 1.7, 1.0], [3.5, 1.8, 1.0]],
+  female: [[2.0, 1.4, 1.0], [2.2, 1.6, 1.1], [2.5, 1.7, 1.1], [3.0, 1.8, 1.2]],
+};
+const LIFESTYLE_TIER_LABELS = ["每周 2–3 小时", "每周 4–5 小时", "每周 6–7 小时", "每周 8–9 小时"];
+
+function lifestyleTier(hours) {
+  const h = Number(hours) || 0;
+  return h < 4 ? 0 : h < 6 ? 1 : h < 8 ? 2 : 3;
+}
+
+// 按当前体重与方法口径全量重算碳蛋脂（阶段降 ≥3% 时触发）。
+// 返回 { carb, protein, fat, kcal, basis }；方法参数缺失时返回 null，由调用方提示去对话里重算。
+function recomputeGoalForWeight(weight, methodId) {
+  const w = Number(weight);
+  if (!w) return null;
+  const pack = state.pack || {};
+  const p = pack.profile || {};
+  const gender = p.gender === "female" ? "female" : "male";
+  const method = methodId || pack.method?.id || "lifestyle";
+  const build = (c, pr, f, basis) => ({
+    carb: round1(w * c),
+    protein: round1(w * pr),
+    fat: round1(w * f),
+    kcal: Math.round(w * c * 4 + w * pr * 4 + w * f * 9),
+    basis,
+  });
+
+  if (method === "lifestyle") {
+    const tier = lifestyleTier(p.exerciseHours);
+    const [c, pr, f] = LIFESTYLE_COEF[gender][tier];
+    return build(c, pr, f, `${LIFESTYLE_TIER_LABELS[tier]} · ${w}kg × ${c}/${pr}/${f} g/kg`);
+  }
+
+  if (method === "carb-cycle") {
+    const phases = pack.method?.phases;
+    const cur = Array.isArray(phases) && phases.length
+      ? (phases.find((x) => x && x.active) || phases[0])
+      : null;
+    if (!cur) return null;
+    const fatRaw = cur.fat && typeof cur.fat === "object" ? (cur.fat[gender] ?? cur.fat.male) : cur.fat;
+    const c = Number(cur.carb), pr = Number(cur.protein), f = Number(fatRaw);
+    if (!c || !pr || !f) return null;
+    return build(c, pr, f, `${cur.name || "当前阶段"} · ${w}kg × ${c}/${pr}/${f} g/kg`);
+  }
+
+  if (method === "recomposition") {
+    const sp = pack.method?.startPoint;
+    if (!sp) return null;
+    const c = Number(sp.carb), pr = Number(sp.protein), f = Number(sp.fat);
+    if (!c || !pr || !f) return null;
+    return build(c, pr, f, `起点系数 ${w}kg × ${c}/${pr}/${f} g/kg`);
+  }
+
+  return null;
+}
+
+// 复盘窗口：最近 7 个「有体重记录」的日期（不足 7 天就用现有全部）。
+// 不用自然日切片，避免用户漏记几天后窗口整体落空。
+function reviewWindow(logs) {
+  const entries = Object.entries(logs || {})
+    .filter(([, v]) => v && v.weight != null && Number.isFinite(Number(v.weight)))
+    .sort(([a], [b]) => a.localeCompare(b));
+  return entries.slice(-7);
+}
+
+// 复盘引擎主函数：只读取数据、给出建议，不写库。
+// 返回 { ready, ... }；ready=false 时 reason 说明还缺什么数据。
+function computeReview() {
+  const pack = state.pack || {};
+  const logs = pack.logs || {};
+  const goal = pack.goal || null;
+  const p = pack.profile || {};
+  const methodId = pack.method?.id || "lifestyle";
+  const isRecomp = methodId === "recomposition";
+
+  const entries = reviewWindow(logs);
+  if (entries.length < 3) {
+    return { ready: false, reason: "体重记录不足 3 天，暂无法复盘。先在「今日 → 今日状态」提交体重（0.1kg 精度即可）。" };
+  }
+  if (!goal) {
+    return { ready: false, reason: "还没有设定目标碳蛋脂，先在对话里生成第一版方案。" };
+  }
+
+  const [startDay, startEntry] = entries[0];
+  const [endDay, endEntry] = entries[entries.length - 1];
+  const wStart = Number(startEntry.weight);
+  const wEnd = Number(endEntry.weight);
+  const spanDays = Math.max(1, Math.round(
+    (new Date(endDay + "T12:00:00") - new Date(startDay + "T12:00:00")) / CS_DAY_MS
+  ));
+  // 折算成「每周降幅%」：窗口不足 7 天时按比例外推，便于统一口径比较
+  const rawDropPct = ((wStart - wEnd) / Math.max(0.0001, wStart)) * 100;
+  const weeklyDropPct = rawDropPct * (7 / spanDays);
+
+  const inWindow = Object.entries(logs).filter(([d]) => d >= startDay && d <= endDay);
+  const hungers = inWindow.map(([, v]) => Number(v?.hunger)).filter((n) => Number.isFinite(n) && n > 0);
+  const hunger5 = hungers.filter((n) => n === 5).length;
+  const hunger4plus = hungers.filter((n) => n >= 4).length;
+  const avgHunger = hungers.length ? hungers.reduce((a, b) => a + b, 0) / hungers.length : null;
+  const feelDown = inWindow.filter(([, v]) => v?.trainingFeel === "乏力").length;
+  const feelUp = inWindow.filter(([, v]) => v?.trainingFeel === "有力").length;
+  const sleeps = inWindow.map(([, v]) => Number(v?.sleep)).filter((n) => Number.isFinite(n) && n > 0);
+  const avgSleep = sleeps.length ? sleeps.reduce((a, b) => a + b, 0) / sleeps.length : null;
+
+  // 阶段累计降幅（相对上次重算基准）→ 是否触发全量重算
+  const baseline = Number(goal.stageBaselineWeight) || Number(p.weight) || wStart;
+  const stageDropPct = ((baseline - wEnd) / Math.max(0.0001, baseline)) * 100;
+  const stageReset = stageDropPct >= STAGE_RESET_PCT;
+
+  let verdict = "ontrack";
+  let deltaCarb = 0;
+  let reason = "";
+
+  if (isRecomp) {
+    // 增肌减脂并行：以主观状态为主，方向与生活化减脂相反（胃口差 → 降碳水）
+    if (feelDown >= 2 || (avgSleep != null && avgSleep < 6.5)) {
+      verdict = "fatigued"; deltaCarb = -10;
+      reason = `本周训练感受「乏力」${feelDown} 次${avgSleep != null ? `、睡眠均值 ${avgSleep.toFixed(1)}h` : ""}，先下调碳水减轻负担，并回看睡眠与有氧量。`;
+    } else if (hunger4plus >= 3 && feelUp >= 2) {
+      verdict = "craving-ok"; deltaCarb = +10;
+      reason = `本周明显渴望（饥饿感 ≥4 达 ${hunger4plus} 天）且训练「有力」${feelUp} 次，状态良好，碳水小幅上调。`;
+    } else if (hungers.length >= 3 && avgHunger != null && avgHunger <= 2) {
+      verdict = "low-appetite"; deltaCarb = -10;
+      reason = `本周饥饿感均值 ${avgHunger.toFixed(1)} 偏低，胃口下降或偏饱，碳水下调。`;
+    } else {
+      verdict = "ontrack";
+      reason = "状态信号平稳（渴望/训练/睡眠/食欲无异常），维持当前目标与缺口。";
+    }
+  } else if (weeklyDropPct > FAST_DROP_PCT) {
+    verdict = "fast"; deltaCarb = +30;
+    reason = `近 ${spanDays} 天折算周降幅 ${weeklyDropPct.toFixed(2)}%，快于安全线 ${FAST_DROP_PCT}%，碳水 +30g 优先保可持续性。`;
+  } else if (hunger5 > 0) {
+    verdict = "hungry"; deltaCarb = +30;
+    reason = `本周有 ${hunger5} 天饥饿感达到 5，碳水 +30g 优先保可持续性。`;
+  } else if (hunger4plus >= 2) {
+    verdict = "mild-hungry"; deltaCarb = +10;
+    reason = `本周 ${hunger4plus} 天饥饿感 ≥4，碳水 +10g。`;
+  } else if (feelDown >= 2) {
+    verdict = "fatigued"; deltaCarb = +10;
+    reason = `本周训练感受「乏力」${feelDown} 次，碳水 +10g 观察恢复。`;
+  } else if (weeklyDropPct < TARGET_DROP_PCT) {
+    verdict = "slow"; deltaCarb = -10;
+    reason = `近 ${spanDays} 天折算周降幅 ${weeklyDropPct.toFixed(2)}% < ${TARGET_DROP_PCT}%，碳水 −10g。`;
+  } else {
+    verdict = "ontrack";
+    reason = `近 ${spanDays} 天折算周降幅 ${weeklyDropPct.toFixed(2)}% 接近 ${TARGET_DROP_PCT}%，保持当前目标。`;
+  }
+
+  // 建议目标：全量重算优先于单点碳水调整
+  let nextGoal = null;
+  let recalcBasis = null;
+  if (stageReset) {
+    const rec = recomputeGoalForWeight(wEnd, methodId);
+    if (rec) {
+      nextGoal = { carb: rec.carb, protein: rec.protein, fat: rec.fat, kcal: rec.kcal };
+      recalcBasis = rec.basis;
+      reason = `阶段累计下降 ${stageDropPct.toFixed(2)}%（≥${STAGE_RESET_PCT}%），按新体重 ${wEnd}kg 全量重算：${rec.basis}。`;
+      verdict = "recalc";
+    } else {
+      reason = `阶段累计下降 ${stageDropPct.toFixed(2)}%（≥${STAGE_RESET_PCT}%），应全量重算，但当前方法缺少重算参数，请在对话里重算后回填。`;
+    }
+  }
+  if (!nextGoal && deltaCarb !== 0) {
+    const newCarb = round1(goal.carb + deltaCarb);
+    nextGoal = {
+      carb: newCarb,
+      protein: goal.protein,
+      fat: goal.fat,
+      kcal: Math.round(newCarb * 4 + goal.protein * 4 + goal.fat * 9),
+    };
+  }
+
+  // 「同次不叠加」：同一窗口已确认过就不再重复应用
+  const adjustLog = Array.isArray(goal.adjustLog) ? goal.adjustLog : [];
+  const alreadyAdjusted = adjustLog.some((a) => a && a.windowEnd === endDay);
+
+  return {
+    ready: true,
+    methodId,
+    isRecomp,
+    windowStart: startDay,
+    windowEnd: endDay,
+    spanDays,
+    sampleDays: entries.length,
+    loggedDays: inWindow.length,
+    metrics: { wStart, wEnd, rawDropPct, weeklyDropPct, hunger5, hunger4plus, avgHunger, feelDown, feelUp, avgSleep, stageDropPct, baseline },
+    verdict,
+    reason,
+    deltaCarb,
+    stageReset,
+    recalcBasis,
+    nextGoal,
+    prevGoal: { carb: goal.carb, protein: goal.protein, fat: goal.fat, kcal: goal.kcal },
+    alreadyAdjusted,
+  };
+}
+
+// 确认生效：写入 goal（含 reviewDay / stageBaselineWeight / adjustLog）与 reviews[]。
+async function applyReview(result) {
+  const pack = state.pack;
+  const p = pack.profile || {};
+  const goal = pack.goal || (pack.goal = {});
+  const startDate = p.startDate || result.windowStart;
+
+  if (result.nextGoal) Object.assign(goal, result.nextGoal);
+  if (goal.reviewDay == null) goal.reviewDay = 5; // 周五
+  if (goal.stageBaselineWeight == null) goal.stageBaselineWeight = Number(p.weight) || result.metrics.wEnd;
+  if (result.stageReset) goal.stageBaselineWeight = result.metrics.wEnd; // 重算后基准归位
+
+  const adjustLog = Array.isArray(goal.adjustLog) ? goal.adjustLog : (goal.adjustLog = []);
+  adjustLog.push({
+    at: new Date().toISOString(),
+    windowStart: result.windowStart,
+    windowEnd: result.windowEnd,
+    verdict: result.verdict,
+    deltaCarb: result.deltaCarb,
+    stageReset: !!result.stageReset,
+  });
+
+  const reviews = pack.reviews || (pack.reviews = []);
+  reviews.push({
+    day: `D${dayNumOf(result.windowEnd, startDate)}`,
+    windowStart: result.windowStart,
+    windowEnd: result.windowEnd,
+    message: result.reason,
+    nextGoal: result.nextGoal ? { ...result.nextGoal } : null,
+    confirmed: true,
+    confirmedAt: new Date().toISOString(),
+  });
+
+  // 归档：复盘记录同时进入只读历史
+  const history = pack.history || (pack.history = { weeks: [], reviews: [] });
+  if (!Array.isArray(history.reviews)) history.reviews = [];
+  history.reviews.push({
+    day: `D${dayNumOf(result.windowEnd, startDate)}`,
+    windowStart: result.windowStart,
+    windowEnd: result.windowEnd,
+    message: result.reason,
+    deltaCarb: result.deltaCarb,
+  });
+
+  const ok = await savePack();
+  if (ok) toast("复盘已生效，新目标已写入");
+  return ok;
+}
+
+// ==========================================================================
+// 排餐器：把「复盘结论 + 目标宏量 + 食材库」交给云端大模型生成下一阶段餐单
+// 输出严格 JSON，校验通过后才允许落库；失败给出明确原因，不静默失败。
+// ==========================================================================
+
+const PLAN_SYSTEM_PROMPT = [
+  "你是减脂餐单生成器。只输出 JSON，不输出解释、前言或任何 JSON 之外的文字。",
+  "只能使用用户提供的食材库中的食材，ingredients[].name 必须与食材库名称完全一致。",
+  "蔬菜与蓝莓不计入碳蛋脂目标，但可以出现在餐单里。",
+  "每天三餐（早餐/午餐/晚餐），每餐 2-5 样食材，份量单位用 g / ml / 个。",
+  "每天碳蛋脂合计尽量接近目标，单项偏差控制在 ±10% 以内。",
+  "7 天中有且仅有 1 天的 reviewDay 为 true，就是给定的复盘日那一天。",
+].join("");
+
+// 生成未来 7 天日期骨架（从今天起）交给模型照抄，避免模型自行推算日历出错。
+function planDateSkeleton() {
+  const names = ["日", "一", "二", "三", "四", "五", "六"];
+  const out = [];
+  const today = new Date();
+  today.setHours(12, 0, 0, 0);
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(today.getTime() + i * CS_DAY_MS);
+    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    out.push({ day: i + 1, date: iso, weekday: names[d.getDay()], reviewDay: d.getDay() === 5 });
+  }
+  return out;
+}
+
+function buildPlanningPrompt(review) {
+  const pack = state.pack || {};
+  const goal = review.nextGoal || pack.goal || {};
+  const foods = allFoods().filter((f) => f && f.name);
+  const selectedIds = new Set(pack.foodLibrary?.selected || []);
+  const preferred = foods.filter((f) => selectedIds.has(f.id));
+  const skeleton = planDateSkeleton();
+  // 复用食材库的基准量口径：per=100 → 每 100g / 100ml，per=1 → 每 个
+  const fmtFood = (f) =>
+    `- ${f.name}（${foodType(f)}）每${perLabel(f).slice(1)}：碳 ${f.carb}g 蛋 ${f.protein}g 脂 ${f.fat}g`;
+
+  return [
+    `【目标】每日 碳水 ${goal.carb}g、蛋白 ${goal.protein}g、脂肪 ${goal.fat}g（约 ${goal.kcal} kcal）。`,
+    "",
+    "【优选食材】优先从这些常用食材里组合：",
+    preferred.length ? preferred.map(fmtFood).join("\n") : "（无，改用下方完整食材库）",
+    "",
+    "【完整食材库】如需替换，只能从以下食材中选择，名称必须完全一致：",
+    foods.map(fmtFood).join("\n"),
+    "",
+    "【日期骨架】严格按以下 7 天输出，date / weekday / reviewDay 原样照抄，不要改动：",
+    skeleton.map((s) => `day ${s.day} → ${s.date}（${s.weekday}）reviewDay=${s.reviewDay}`).join("\n"),
+    "",
+    "【餐次】每天固定三餐：早餐 08:00、午餐 12:30、晚餐 18:30。",
+    "",
+    "【输出格式】只输出下面这个结构的 JSON：",
+    '{"days":[{"day":1,"date":"YYYY-MM-DD","weekday":"X","reviewDay":false,"meals":[{"id":"m1","name":"早餐","time":"08:00","ingredients":[{"name":"燕麦片","amount":60,"unit":"g"}]}]}]}',
+  ].join("\n");
+}
+
+// 从模型输出里稳健地取 JSON（容错 Markdown 围栏与前后多余文字）
+function parsePlanJson(text) {
+  let s = String(text || "").trim();
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) s = fence[1].trim();
+  const a = s.indexOf("{");
+  const b = s.lastIndexOf("}");
+  if (a >= 0 && b > a) s = s.slice(a, b + 1);
+  return JSON.parse(s);
+}
+
+// 结构校验：天数、餐次名、食材字段、复盘日恰好 1 天
+function validateGeneratedPlan(plan) {
+  if (!plan || !Array.isArray(plan.days) || !plan.days.length) throw new Error("模型没有返回 days 数组");
+  let reviewDays = 0;
+  for (const d of plan.days) {
+    if (!d || !d.date || !Array.isArray(d.meals) || !d.meals.length) {
+      throw new Error("餐单结构不完整（缺少 date 或 meals）");
+    }
+    if (d.reviewDay) reviewDays++;
+    for (const m of d.meals) {
+      if (!MEAL_NAMES.includes(m?.name)) throw new Error(`餐次名不合法：${m?.name}`);
+      if (!Array.isArray(m.ingredients) || !m.ingredients.length) throw new Error(`「${m.name}」没有食材`);
+      for (const it of m.ingredients) {
+        if (!it?.name) throw new Error("存在没有名称的食材");
+        if (!Number.isFinite(Number(it.amount)) || Number(it.amount) <= 0) throw new Error(`「${it.name}」份量不合法`);
+        if (!it.unit) it.unit = "g";
+      }
+    }
+  }
+  if (plan.days.length === 7 && reviewDays !== 1) throw new Error(`复盘日应为 1 天，实际 ${reviewDays} 天`);
+  return plan;
+}
+
+// 调模型生成下一阶段餐单（onDelta 用于流式进度）
+async function generatePlanViaLlm(review, options = {}) {
+  const messages = [
+    { role: "system", content: PLAN_SYSTEM_PROMPT },
+    { role: "user", content: buildPlanningPrompt(review) },
+  ];
+  const res = await callLlm(messages, { onDelta: options.onDelta, temperature: 0.7, signal: options.signal });
+  const plan = validateGeneratedPlan(parsePlanJson(res.text));
+  return { plan, model: res.model };
+}
+
+// 落库：旧周归档进 history.weeks，再写入新 weeklyPlan
+async function applyGeneratedPlan(plan, review) {
+  const pack = state.pack;
+  const goal = review.nextGoal || pack.goal || {};
+  const history = pack.history || (pack.history = { weeks: [], reviews: [] });
+  if (!Array.isArray(history.weeks)) history.weeks = [];
+  if (pack.weeklyPlan && Array.isArray(pack.weeklyPlan.days) && pack.weeklyPlan.days.length) {
+    history.weeks.push({
+      weekIndex: pack.weeklyPlan.weekIndex ?? null,
+      startDate: pack.weeklyPlan.startDate ?? null,
+      archivedAt: new Date().toISOString(),
+      goalAtThatTime: pack.goal
+        ? { carb: pack.goal.carb, protein: pack.goal.protein, fat: pack.goal.fat }
+        : null,
+      days: pack.weeklyPlan.days,
+    });
+  }
+  const weekIndex = (Number(pack.weeklyPlan?.weekIndex) || 0) + 1;
+  pack.weeklyPlan = {
+    confirmed: true,
+    weekIndex,
+    startDate: plan.days[0].date,
+    generatedBy: "cloud-llm",
+    generatedAt: new Date().toISOString(),
+    goal,
+    days: plan.days,
+    shopping: pack.weeklyPlan?.shopping || [],
+    nutritionTotals: pack.weeklyPlan?.nutritionTotals || null,
+  };
+  const ok = await savePack();
+  if (ok) toast(`第 ${weekIndex} 周餐单已生成并应用`);
+  return ok;
+}
+
 function renderReview() {
   const view = $("#view-review");
   view.innerHTML = "";
@@ -1024,14 +1544,13 @@ function renderReview() {
   const sleeps = Object.values(logs).filter((v) => v?.sleep != null).map((v) => Number(v.sleep));
   const avgSleep = sleeps.length ? sleeps.reduce((a, b) => a + b, 0) / sleeps.length : null;
 
-  const trainCount = { "推": 0, "拉": 0, "蹲": 0, "休": 0 };
-  let trainLogged = 0;
-  for (const v of Object.values(logs)) {
-    const t = trainingType(v?.training);
-    if (t) { trainCount[t]++; trainLogged++; }
-  }
-  const strengthDays = trainCount["推"] + trainCount["拉"] + trainCount["蹲"];
-  const strengthPct = trainLogged ? Math.round((strengthDays / trainLogged) * 100) : 0;
+  const trainEntries = Object.entries(logs)
+    .filter(([, v]) => Number(v?.trainingMin) > 0)
+    .sort(([a], [b]) => a.localeCompare(b));
+  const trainMins = trainEntries.map(([, v]) => Number(v.trainingMin));
+  const trainDays = trainMins.length;
+  const trainTotal = trainMins.reduce((a, b) => a + b, 0);
+  const trainAvg = trainDays ? Math.round(trainTotal / trainDays) : 0;
 
   const hungerEntries = Object.entries(logs).filter(([, v]) => v?.hunger != null).sort(([a], [b]) => a.localeCompare(b));
   const sleepEntries = Object.entries(logs).filter(([, v]) => v?.sleep != null).sort(([a], [b]) => a.localeCompare(b));
@@ -1074,9 +1593,9 @@ function renderReview() {
           ${sleepEntries.length ? barsSVG(sleepEntries, "sleep", startDate, { yMax: Math.max(10, ...sleeps), gridStep: 5, color: "var(--moss)" }) : '<p class="empty">暂无睡眠记录</p>'},
         </div>
         <div class="review-panel">
-          <div class="review-panel-title">训练类型分布</div>
-          <div class="review-panel-hint">推 / 拉 / 蹲 / 休息 · 力量占比 ${strengthPct}%</div>
-          ${trainingDistHTML(trainCount)}
+          <div class="review-panel-title">每日训练时长</div>
+          <div class="review-panel-hint">单位 min · 共 ${trainDays} 天 · 累计 ${trainTotal} min${trainDays ? ` · 次均 ${trainAvg} min` : ""}</div>
+          ${trainEntries.length ? barsSVG(trainEntries, "trainingMin", startDate, { yMax: Math.max(60, ...trainMins), gridStep: 30, color: "var(--primary)", label: "每日训练时长" }) : '<p class="empty">暂无训练时长——在「今日 → 今日状态」填「训练 min」提交后显示。</p>'}
         </div>
       </div>
     </section>`));
@@ -1094,6 +1613,230 @@ function renderReview() {
       <p class="hint-text" style="margin:0 0 12px">每日实际摄入 vs 目标，自动计算 · 单项偏差 ≤±10% 记为达标</p>
       ${deviationHTML(deviations, g, startDate)}
     </section>`));
+
+  view.appendChild(reviewAdvisorCard());
+  view.appendChild(planStudioCard());
+}
+
+// —— 本周复盘卡：内置规则自动判定，确认后才生效 ——
+function reviewAdvisorCard() {
+  const card = el(`
+    <section class="card">
+      <h2><i>${icon("sun")}</i>本周复盘 · 自动判定</h2>
+      <p class="hint-text" style="margin:0 0 12px">按复盘规则自动核算最近记录并给出目标调整建议；确认后才会写入。</p>
+      <div class="advisor-body"></div>
+    </section>`);
+  const body = card.querySelector(".advisor-body");
+
+  const paint = () => {
+    body.innerHTML = "";
+    const r = computeReview();
+    if (!r.ready) {
+      body.appendChild(el(`<p class="empty">${esc(r.reason)}</p>`));
+      return;
+    }
+    const m = r.metrics;
+    const verdictMap = {
+      fast: ["下降过快", "alert"], hungry: ["饥饿偏高", "alert"],
+      "mild-hungry": ["轻微饥饿", "warn"], fatigued: ["训练乏力", "warn"],
+      slow: ["进度偏慢", "warn"], ontrack: ["按计划推进", "ok"],
+      recalc: ["触发全量重算", "recalc"], "craving-ok": ["状态良好", "ok"],
+      "low-appetite": ["胃口偏低", "warn"],
+    };
+    const [vLabel, vCls] = verdictMap[r.verdict] || ["已判定", "ok"];
+
+    const metrics = [
+      [fmtNum(m.weeklyDropPct) + "%", "折算周降幅"],
+      [m.hunger4plus + " 天", "饥饿感 ≥4"],
+      [m.feelDown + " 次", "训练乏力"],
+      [fmtNum(m.stageDropPct) + "%", "阶段累计降幅"],
+    ].map(([v, k]) => `<div class="am-cell"><b>${v}</b><span>${k}</span></div>`).join("");
+
+    const next = r.nextGoal;
+    const rows = [
+      ["碳水", r.prevGoal.carb, next ? next.carb : null, "g"],
+      ["蛋白", r.prevGoal.protein, next ? next.protein : null, "g"],
+      ["脂肪", r.prevGoal.fat, next ? next.fat : null, "g"],
+      ["热量", r.prevGoal.kcal, next ? next.kcal : null, ""],
+    ].map(([label, a, b, unit]) => {
+      const to = b == null ? a : b;
+      const diff = round1(to - a);
+      const cls = diff > 0 ? "up" : diff < 0 ? "down" : "flat";
+      const sign = diff > 0 ? "+" : "";
+      return `<div class="gc-row"><span>${label}</span><span>${fmtNum(a)}</span><span>${fmtNum(to)}</span><span class="gc-diff ${cls}">${diff === 0 ? "—" : sign + fmtNum(diff) + unit}</span></div>`;
+    }).join("");
+
+    body.appendChild(el(`
+      <div class="advisor-inner">
+        <div class="advisor-head">
+          <span class="advisor-verdict ${vCls}">${vLabel}</span>
+          <span class="advisor-window">${r.windowStart.slice(5)} → ${r.windowEnd.slice(5)} · 样本 ${r.sampleDays} 天</span>
+        </div>
+        <div class="advisor-reason">${esc(r.reason)}</div>
+        <div class="advisor-metrics">${metrics}</div>
+        <div class="goal-compare">
+          <div class="gc-row gc-head"><span>营养素</span><span>当前</span><span>建议</span><span>变化</span></div>
+          ${rows}
+        </div>
+      </div>`));
+
+    const actions = el(`
+      <div class="advisor-actions">
+        <span class="advisor-note"></span>
+        <button class="text-button primary-action advisor-apply" type="button"></button>
+      </div>`);
+    const note = actions.querySelector(".advisor-note");
+    const btn = actions.querySelector(".advisor-apply");
+
+    if (r.alreadyAdjusted) {
+      note.textContent = "本窗口已应用过调整，不会重复叠加。";
+      btn.textContent = "本窗口已生效";
+      btn.disabled = true;
+    } else {
+      note.textContent = next ? "确认后写入目标，并把本周记录归档。" : "本次判定无需调整目标，确认后仅记录复盘。";
+      btn.textContent = next ? "确认并生效" : "确认复盘记录";
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        btn.textContent = "应用中…";
+        const ok = await applyReview(r);
+        if (ok) render();
+        else { btn.disabled = false; btn.textContent = "确认并生效"; }
+      });
+    }
+    body.appendChild(actions);
+  };
+
+  paint();
+  return card;
+}
+
+// —— 下一阶段餐单卡：云端生成 → 预览 → 应用 ——
+function planStudioCard() {
+  const card = el(`
+    <section class="card">
+      <h2><i>${icon("calendar")}</i>下一阶段餐单</h2>
+      <p class="hint-text" style="margin:0 0 12px">按目标宏量，用云端大模型从你的食材库排 7 天餐单；生成后可预览，点「应用到本周计划」才写入。</p>
+      <div class="studio-body"></div>
+    </section>`);
+  const body = card.querySelector(".studio-body");
+  let pending = null;
+
+  const renderIdle = () => {
+    pending = null;
+    const r = computeReview();
+    const g = (r.ready && r.nextGoal) || state.pack.goal || {};
+    body.innerHTML = "";
+    body.appendChild(el(`
+      <div class="studio-idle">
+        <div class="studio-goal">将按 碳水 ${fmtNum(g.carb)}g · 蛋白 ${fmtNum(g.protein)}g · 脂肪 ${fmtNum(g.fat)}g 排餐</div>
+        <div class="studio-row">
+          <span class="studio-note">${r.ready ? "生成约需 20–60 秒" : esc(r.reason)}</span>
+          <button class="text-button primary-action studio-run" type="button"${r.ready ? "" : " disabled"}>生成下一阶段餐单</button>
+        </div>
+      </div>`));
+    const runBtn = body.querySelector(".studio-run");
+    if (runBtn && r.ready) runBtn.addEventListener("click", () => run());
+  };
+
+  const run = async () => {
+    const r = computeReview();
+    if (!r.ready) { toast(r.reason, true); return; }
+    body.innerHTML = "";
+    const box = el(`
+      <div class="studio-running">
+        <div class="studio-bar"><div class="studio-bar-fill"></div></div>
+        <div class="studio-run-text">正在生成餐单…</div>
+        <div class="studio-run-meta">已接收 <b class="studio-chars">0</b> 字</div>
+      </div>`);
+    body.appendChild(box);
+    const chars = box.querySelector(".studio-chars");
+    let n = 0;
+    try {
+      const { plan, model } = await generatePlanViaLlm(r, {
+        onDelta: (d) => { n += d.length; chars.textContent = String(n); },
+      });
+      pending = { plan, review: r, model };
+      renderPreview();
+    } catch (error) {
+      const code = error?.code || "";
+      const hint = code === "no_cloud" ? "当前为本地模式，云端大模型不可用。"
+        : code === "no_llm" ? "宿主未接入大模型通道。"
+        : code === "no_model" ? "云端暂无可用模型，请稍后再试。"
+        : (error?.message || "生成失败");
+      body.innerHTML = "";
+      body.appendChild(el(`
+        <div class="studio-error">
+          <p>生成失败：${esc(hint)}</p>
+          <button class="text-button studio-retry" type="button">重试</button>
+        </div>`));
+      body.querySelector(".studio-retry").addEventListener("click", () => run());
+    }
+  };
+
+  const renderPreview = () => {
+    const { plan, review, model } = pending;
+    const goal = review.nextGoal || state.pack.goal || {};
+    const within = (v, t) => (t ? Math.abs(v - t) / t <= 0.12 : true);
+    const days = plan.days.map((d) => {
+      const sum = planDayMacros(d);
+      const meals = d.meals
+        .map((mm) => `<div class="sp-meal"><b>${esc(mm.name)}</b>${mm.ingredients.map((i) => `${esc(i.name)} ${i.amount}${esc(i.unit)}`).join(" · ")}</div>`)
+        .join("");
+      return `
+        <div class="sp-day">
+          <div class="sp-day-head"><b>D${d.day}</b><span>${d.date.slice(5)} ${esc(d.weekday)}</span>${d.reviewDay ? '<span class="review-tag">复盘日</span>' : ""}</div>
+          ${meals}
+          <div class="sp-macros">
+            <span class="${within(sum.carb, goal.carb) ? "ok" : "off"}">碳 ${fmtNum(sum.carb)}g</span>
+            <span class="${within(sum.protein, goal.protein) ? "ok" : "off"}">蛋 ${fmtNum(sum.protein)}g</span>
+            <span class="${within(sum.fat, goal.fat) ? "ok" : "off"}">脂 ${fmtNum(sum.fat)}g</span>
+            <span class="sp-kcal">${sum.kcal} kcal</span>
+          </div>
+        </div>`;
+    }).join("");
+    body.innerHTML = "";
+    body.appendChild(el(`
+      <div class="studio-preview">
+        <div class="studio-preview-head">已生成 ${plan.days.length} 天 · ${esc(model || "云端模型")} · 绿色表示落在目标 ±12% 内</div>
+        <div class="sp-list">${days}</div>
+        <div class="studio-actions">
+          <button class="text-button studio-redo" type="button">重新生成</button>
+          <button class="text-button primary-action studio-apply" type="button">应用到本周计划</button>
+        </div>
+      </div>`));
+    body.querySelector(".studio-redo").addEventListener("click", () => run());
+    body.querySelector(".studio-apply").addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      btn.textContent = "应用中…";
+      const ok = await applyGeneratedPlan(pending.plan, pending.review);
+      if (ok) render();
+      else { btn.disabled = false; btn.textContent = "应用到本周计划"; }
+    });
+  };
+
+  renderIdle();
+  return card;
+}
+
+// 生成餐单某天的宏量合计（按食材库名称折算；蔬菜/蓝莓等零宏量食材自动不计）
+function planDayMacros(day) {
+  const sum = { carb: 0, protein: 0, fat: 0 };
+  for (const meal of day.meals || []) {
+    for (const it of meal.ingredients || []) {
+      const food = findFood(it.name);
+      if (!food) continue;
+      const m = foodMacros(food, Number(it.amount) || 0);
+      sum.carb += m.carb;
+      sum.protein += m.protein;
+      sum.fat += m.fat;
+    }
+  }
+  sum.carb = round1(sum.carb);
+  sum.protein = round1(sum.protein);
+  sum.fat = round1(sum.fat);
+  sum.kcal = Math.round(sum.carb * 4 + sum.protein * 4 + sum.fat * 9);
+  return sum;
 }
 
 // —— 体重趋势：折线 + 渐变面积 + 复盘日金点 ——
@@ -1143,8 +1886,8 @@ function weightTrendSVG(entries, startDate, currentWeight) {
   </svg>`;
 }
 
-// —— 通用柱状图（睡眠 / 饥饿感）——
-function barsSVG(entries, key, startDate, { yMax, gridStep, color }) {
+// —— 通用柱状图（睡眠 / 训练时长 / 饥饿感）——
+function barsSVG(entries, key, startDate, { yMax, gridStep, color, label }) {
   const W = 560, H = 260, padL = 36, padR = 10, padT = 16, padB = 34;
   const n = entries.length;
   const plotW = W - padL - padR, plotH = H - padT - padB;
@@ -1168,28 +1911,8 @@ function barsSVG(entries, key, startDate, { yMax, gridStep, color }) {
       ? `<text x="${(padL + slot * i + slot / 2).toFixed(1)}" y="${H - 12}" text-anchor="middle" class="cs-svg-tick">D${d}</text>`
       : "";
   }).join("");
-  return `<svg viewBox="0 0 ${W} ${H}" class="cs-svg" role="img" aria-label="${key === "sleep" ? "每日睡眠时长" : "每日饥饿感"}">${grid}${bars}${labels}</svg>`;
-}
-
-// —— 训练类型分布：横向条 + 图例 ——
-function trainingDistHTML(trainCount) {
-  const total = trainCount["推"] + trainCount["拉"] + trainCount["蹲"] + trainCount["休"];
-  if (!total) return '<p class="empty">暂无训练记录——在「今日 → 今日状态」选择训练类型后显示。</p>';
-  const rows = [
-    ["推", trainCount["推"], "var(--primary)"],
-    ["拉", trainCount["拉"], "var(--moss)"],
-    ["蹲", trainCount["蹲"], "var(--sage)"],
-    ["休", trainCount["休"], "var(--bg-soft)"],
-  ];
-  const max = Math.max(1, ...rows.map((r) => r[1]));
-  const body = rows.map(([label, count, color]) => `
-    <div class="cs-dist-row">
-      <span class="cs-dist-label">${label}</span>
-      <div class="cs-dist-track"><div class="cs-dist-fill" style="width:${(count / max) * 100}%;background:${color}"></div></div>
-      <span class="cs-dist-count">${count} 天</span>
-    </div>`).join("");
-  const legend = rows.map(([label, , color]) => `<span><span class="cs-legend-dot" style="background:${color}"></span>${label}</span>`).join("");
-  return `<div class="cs-dist">${body}</div><div class="cs-dist-legend">${legend}</div>`;
+  const ariaLabel = label || (key === "sleep" ? "每日睡眠时长" : "每日饥饿感");
+  return `<svg viewBox="0 0 ${W} ${H}" class="cs-svg" role="img" aria-label="${ariaLabel}">${grid}${bars}${labels}</svg>`;
 }
 
 // —— 执行偏差：自动计算的实际 vs 目标，逐日列出 ——
@@ -1254,7 +1977,7 @@ function renderMine() {
 
   const favs = state.pack.favoriteMeals || [];
   if (favs.length) {
-    const favCard = el('<section class="card"><h2><i>' + icon("leaf") + '</i>常用餐</h2><div class="fav-list"></div><p class="empty">在「今日」页某餐点「存为常用餐」新增或更新；点「记入」一键填回当天记录。</p></section>');
+    const favCard = el('<section class="card"><h2><i>' + icon("leaf") + '</i>常用餐</h2><div class="fav-list"></div><p class="empty">在「今日」页某餐点「存为常用餐」新增或更新；点「记入」一键填回当天记录；点「编辑」可改名称与份量。</p></section>');
     const holder = favCard.querySelector(".fav-list");
     favs.forEach((f) => {
       const summary = (f.ingredients || []).map((i) => `${esc(i.name)} ${i.amount}${i.unit}`).join(" · ");
@@ -1265,9 +1988,11 @@ function renderMine() {
             <span class="foodlib-macros"><small>${esc(f.mealName)}</small> · ${summary}</span>
           </div>
           <div class="foodlib-item-actions">
+            <button class="text-button fav-edit" type="button" data-id="${esc(f.id)}">编辑</button>
             <button class="text-button fav-del" type="button" data-id="${esc(f.id)}">删除</button>
           </div>
         </div>`);
+      row.querySelector(".fav-edit").addEventListener("click", () => openFavoriteEditor(f.id));
       row.querySelector(".fav-del").addEventListener("click", () => {
         if (window.confirm("确定删除常用餐「" + f.name + "」？")) {
           removeFavoriteMeal(f.id);

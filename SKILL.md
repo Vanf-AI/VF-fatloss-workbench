@@ -1,6 +1,6 @@
 ---
 name: vf-fatloss-workbench
-description: Collect profile and health screening, let the user pick one of three Tan-Shi fat-loss methods (lifestyle / carb-cycle / recomposition, non-mixable), compute daily macro targets by the chosen method, generate a weekly meal plan with shopping list, provide a customizable food library (override/hide built-ins, add custom foods, 6-type filter), support fast daily logging via favorite meals and per-ingredient steppers, auto-compute daily intake deviations in the 7-day review, validate the FatLossPack, and persist it to the cloud (editable + read-only share link) with a local JSON fallback. The deployable frontend ships three switchable themes (organic / industrial / editorial). Excludes medical diagnosis, inventory/fridge, social, payment, training prescription, and coach chat.
+description: Collect profile and health screening, let the user pick one of three Tan-Shi fat-loss methods (lifestyle / carb-cycle / recomposition, non-mixable), compute daily macro targets by the chosen method, generate a weekly meal plan with shopping list, provide a customizable food library (override/hide built-ins, add custom foods, 6-type filter), support fast daily logging via favorite meals and per-ingredient steppers, run a built-in deterministic weekly-review engine that adjusts the carb target by rule and recomputes macros past a 3% stage drop, generate the next week's plan through the cloud LLM from the user's own food library, auto-compute daily intake deviations, validate the FatLossPack, and persist it to the cloud (editable + read-only share link) with a local JSON fallback. The deployable frontend ships three switchable themes (organic / industrial / editorial). Excludes medical diagnosis, inventory/fridge, social, payment, training prescription, and coach chat.
 author: "VanF"
 ---
 
@@ -17,7 +17,10 @@ author: "VanF"
    - 年前碳水循环：阶段表 + 高碳日（[methods/carb-cycle.md](references/methods/carb-cycle.md)），需明确起止日与每阶段天数。
    - 增肌减脂并行：范围内起始值 + 波形调整（[methods/recomposition.md](references/methods/recomposition.md)）。
 4. **周餐单 + 采购清单**：先征询口味偏好（忌口 / 替换 / 份量 / 特殊日），再按 [执行流程](references/workflow.md) 与 [轻量食物表](references/food-table.md) 生成七日餐单（食材替换、备餐批做），输出采购清单。**确认闸**：用户确认餐单后再继续。
-5. **记录与复盘**：给每日记录说明（[review.md](references/review.md)）。前端记录支持三种便捷方式：常用餐一键记入（`favoriteMeals`，食材只存份量不存宏量快照）、食材行步进器（−/克数/＋，按单位定步长，点击克数可精确输入）、按计划计入。复盘页的执行偏差由「实际摄入 vs 目标」公式自动算出（>±10% 标超量/不足），无需手动填写。每 7 天综合复盘，按方法口径给下周调整并写入 `nextGoal`。同次碳水调整不叠加；阶段体重降 ≥3% 才全量重算。
+5. **记录与复盘**：给每日记录说明（[review.md](references/review.md)）。前端记录支持三种便捷方式：常用餐一键记入（`favoriteMeals`，食材只存份量不存宏量快照）、食材行步进器（−/克数/＋，按单位定步长，点击克数可精确输入）、按计划计入。「今日状态」以草稿方式填写、显式提交后落库，一次记录体重 / 睡眠 / 训练时长 / **训练感受**（有力 / 一般 / 乏力）/ 饥饿感；执行偏差由「实际摄入 vs 目标」公式自动算出（>±10% 标超量 / 不足），无需手动填写。
+   - **复盘内置确定性引擎**（前端 `computeReview`）：取最近 7 个有体重记录的日期为核算窗口，按阈值（理想 1.0% / 过快 1.5% / 阶段重算 3.0%）自动判定，给出 `nextGoal` 建议与判定依据；用户点「确认并生效」才写入 `goal` 与 `reviews[]`。同一核算窗口已应用过则不再叠加（`goal.adjustLog` 闸门）。
+   - **下一阶段餐单**：由「下一阶段餐单」卡调用云端大模型，按 `nextGoal` + 用户食材库生成 7 天餐单，通过结构校验后由用户点「应用到本周计划」落库，旧周归档进 `history.weeks[]`。生成契约见 [planning.md](references/planning.md)。
+   - 口径细节（两套方法的判定方向差异、全量重算条件、输出字段）见 [review.md](references/review.md)。
 6. **校验**：输出完整 `FatLossPack` JSON，运行：
    ```bash
    node scripts/validate_fatlosspack.mjs <fatlosspack.json>
@@ -47,7 +50,7 @@ author: "VanF"
 - 健康筛查异常 → `record-only` 或建议咨询，不自动套用方法。
 - 标签缺失不记零值；用户不实填不虚构数据；无可靠规格的食材不估算。
 - 三套方法宏量目标 / 调整节奏 / 训练要求**不混用**。
-- 减重 < 3% 才全量重算（沿用方法规则）；同次碳水调整不叠加。
+- 阶段累计下降 ≥3% 才按新体重全量重算（沿用方法规则）；同次碳水调整不叠加。
 - 食材替换等量换算 + 用油补偿（沿用既有口径）；蓝莓 / 蔬菜 / 南瓜籽 / 坚果按管理口径不计入目标，不表示无热量。
 - 云端凭据只通过宿主身份 / 权限 / Secret / 环境变量注入，禁止写入 FatLossPack、日志或导出文件。
 - 每位用户的数据存该用户自己的云项目；开发者测试项目只承载演示数据。

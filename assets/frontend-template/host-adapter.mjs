@@ -18,6 +18,8 @@ export function createFatLossHostAdapter(options = {}) {
   const mode = options.mode === "read" ? "read" : "edit";
   const loadRecord = requireFunction(options.load, "load");
   const saveRecord = mode === "edit" ? requireFunction(options.save, "save") : options.save;
+  // LLM 是可选能力：宿主注入则透传，未注入保持 null，调用方据此降级提示（不静默失败）。
+  const llmCall = typeof options.llm === "function" ? options.llm : null;
   return Object.freeze({
     mode,
     async load() {
@@ -32,5 +34,6 @@ export function createFatLossHostAdapter(options = {}) {
       const version = requireVersion(result?.version ?? result?.revision, "save");
       return { ...result, version };
     },
+    llm: llmCall ? (input) => llmCall(input) : null,
   });
 }

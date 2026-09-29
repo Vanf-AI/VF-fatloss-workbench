@@ -28,6 +28,7 @@ history
   - `carb-cycle`：`phases[]`，每项 `{ index, name, carb, protein, fat, startDate, days, isHighCarb }`；`carb/protein/fat` 为 `g/kg` 系数；需覆盖明确起止日；高碳日 `isHighCarb: true`。
   - `recomposition`：`ranges`（碳/蛋/脂各为 `[min,max]` g/kg）、`startPoint`（初始目标 g/kg，须落在 `ranges` 内）、`stateSignals[]`（观察维度：渴望 / 训练状态 / 睡眠 / 食欲等）。
 - `goal`：`carb`、`protein`、`fat`、`kcal`（整数）；`kcal = carb*4 + protein*4 + fat*9`。
+  - 复盘支撑字段（可选，由复盘引擎写入）：`reviewDay`（0–6，复盘日，0=周日）、`stageBaselineWeight`（阶段基准体重 kg，用于判定「阶段降 ≥3% 全量重算」）、`adjustLog[]`（调整留痕 `{ at, windowStart, windowEnd, verdict, deltaCarb, stageReset }`，同一 `windowEnd` 不重复应用）。
 - `fixedIntakes`：`proteinPowder`、`milk`（数值）、`note`。
 - `supplements`：`blueberries`、`vegetables`、`pumpkinSeeds`、`nuts`（布尔）。
 - `foodLibrary`：`selected[]`（历史遗留，早期选食材用，现已弃用、保留空数组向后兼容）、`hidden[]`（隐藏的内置食材 `id` 数组）、`custom[]`（自定义 / 覆盖条目）。`custom[]` 每项 `{ id, name, carb, protein, fat, unit, per, category, note? }`：`id` 命中内置同 `id`=覆盖该内置，否则纯新增（`custom-*`）；`carb/protein/fat` 为该条目基准量下的宏量克数；`unit` 为 `g` / `ml` / `个`；`per` 为基准量（100=每 100g/ml，1=每 1 个）；`category` 为 6 类之一或内置细分。详见 [food-library.md](food-library.md)。
@@ -35,12 +36,15 @@ history
   - `days[]`：每项 `{ day, date, weekday, reviewDay, meals[] }`。
   - `meals[]`：每项 `{ id, name, time, ingredients[] }`；`name` 限定 `早餐` / `午餐` / `晚餐` / `加餐`。
   - `ingredients[]`：每项 `{ name, amount, unit }`。
-- `logs`：以天号为键的对象；每天 `{ weight?, sleep?, training?, hunger?, meals? }`。执行偏差不落库：由前端 `computeDeviations` 遍历 `meals` 的宏量快照求和（`dayIntake`）后与 `goal` 对比自动得出，无需用户手填 `deviation`。
+- `logs`：以天号为键的对象；每天 `{ weight?, sleep?, trainingMin?, trainingFeel?, hunger?, meals? }`。
+  - `trainingMin`：训练时长（分钟）；复盘页按它绘制每日训练柱状图。
+  - `trainingFeel`：训练感受，限定 `有力` / `一般` / `乏力`；是复盘规则「≥2 次乏力 → 碳水 +10g」的数据源，缺省即视为未记录（不参与判定）。
+  - 执行偏差不落库：由前端 `computeDeviations` 遍历 `meals` 的宏量快照求和（`dayIntake`）后与 `goal` 对比自动得出，无需用户手填 `deviation`。
   - `meals`：以餐名（`早餐` / `午餐` / `晚餐` / `加餐`）为键；每餐 `{ items[] }`。
   - `items[]`：每项 `{ id, name, amount, unit, carb, protein, fat }`；`amount` 为摄入数量、`unit` 为单位（`g` / `ml` / `个`），`carb/protein/fat` 为该食材该份数量折算后的宏量（克，快照，保留历史不受食材库更新影响）。该餐合计宏量 = Σ items 的 `carb/protein/fat`。
-- `reviews`：每项 `{ day, message, nextGoal, confirmed }`；`nextGoal` 同 `goal` 结构。
+- `reviews`：每项 `{ day, windowStart, windowEnd, message, nextGoal, confirmed, confirmedAt? }`；`nextGoal` 同 `goal` 结构；`windowStart` / `windowEnd` 为本次核算窗口的起止日期。
 - `favoriteMeals`：每项 `{ id, name, mealName, ingredients[] }`；`ingredients[]` 每项 `{ id, name, amount, unit }`，只存食材与份量、**不存宏量快照**——「记入」时按当前食材库实时算碳蛋脂，食材库改动后自动跟随。
-- `history`：`weeks[]`、`reviews[]`（归档已完成周，只读不重算）。
+- `history`：`weeks[]`（被替换下来的周计划，每项 `{ weekIndex, startDate, archivedAt, goalAtThatTime, days[] }`）、`reviews[]`（复盘摘要）。归档只读、不重算。
 
 ## 引用与安全
 

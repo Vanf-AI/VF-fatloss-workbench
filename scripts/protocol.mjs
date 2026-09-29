@@ -84,6 +84,18 @@ export function validateFatLossPack(pack) {
       if (isNum(g.kcal) && Math.abs(g.kcal - expect) > 1)
         err("goal.kcal", `应为 carb*4+protein*4+fat*9 ≈ ${expect}，实得 ${g.kcal}`);
     }
+    // 复盘支撑字段（可选；由前端复盘引擎写入，缺失时引擎回退到 profile.weight）
+    if (g.reviewDay !== undefined && (!isNum(g.reviewDay) || g.reviewDay < 0 || g.reviewDay > 6))
+      err("goal.reviewDay", "应为 0–6 的整数（0=周日，5=周五）");
+    if (g.stageBaselineWeight !== undefined &&
+        (!isNum(g.stageBaselineWeight) || g.stageBaselineWeight <= 0))
+      err("goal.stageBaselineWeight", "应为正数");
+    if (g.adjustLog !== undefined) {
+      if (!Array.isArray(g.adjustLog)) err("goal.adjustLog", "应为数组");
+      else g.adjustLog.forEach((a, i) => {
+        if (!isObj(a)) err(`goal.adjustLog[${i}]`, "应为对象");
+      });
+    }
   }
 
   // fixedIntakes / supplements / foodLibrary
@@ -139,6 +151,17 @@ export function validateFatLossPack(pack) {
   if (pack.reviews !== undefined && !Array.isArray(pack.reviews))
     err("reviews", "应为数组");
 
+  // history（可选；已完成周的归档与复盘留痕，只读不重算）
+  if (pack.history !== undefined) {
+    if (!isObj(pack.history)) err("history", "应为对象");
+    else {
+      if (pack.history.weeks !== undefined && !Array.isArray(pack.history.weeks))
+        err("history.weeks", "应为数组");
+      if (pack.history.reviews !== undefined && !Array.isArray(pack.history.reviews))
+        err("history.reviews", "应为数组");
+    }
+  }
+
   // logs（可选；存在则校验 meals.items 结构）
   if (pack.logs !== undefined) {
     if (!isObj(pack.logs)) err("logs", "应为对象");
@@ -148,9 +171,18 @@ export function validateFatLossPack(pack) {
   return errors;
 }
 
+const TRAINING_FEELS = ["有力", "一般", "乏力"];
+
 function validateLogs(logs, err) {
   Object.entries(logs).forEach(([day, entry]) => {
     if (!isObj(entry)) return err(`logs.${day}`, "应为对象");
+    // 训练感受（可选）：复盘引擎判定「训练表现下降」的数据源
+    if (entry.trainingFeel !== undefined && !TRAINING_FEELS.includes(entry.trainingFeel))
+      err(`logs.${day}.trainingFeel`, `应为 ${TRAINING_FEELS.join(" / ")}`);
+    for (const k of ["weight", "sleep", "trainingMin", "hunger"]) {
+      if (entry[k] !== undefined && !isNum(entry[k]))
+        err(`logs.${day}.${k}`, "应为数字");
+    }
     if (entry.meals === undefined) return;
     if (!isObj(entry.meals)) return err(`logs.${day}.meals`, "应为对象");
     Object.entries(entry.meals).forEach(([mealName, meal]) => {

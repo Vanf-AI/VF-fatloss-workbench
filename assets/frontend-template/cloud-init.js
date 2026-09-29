@@ -86,6 +86,29 @@
         if (updErr) throw updErr;
         return { revision: updated.revision };
       },
+      // 可选能力：把云端免密钥大模型封装成一次「收集完整文本」的调用。
+      // 必须首条为 system 消息（SDK 不代插）；onDelta 用于流式回调。
+      // 未注入此方法时，前端 callLlm() 会抛出 no_llm 并给出降级提示，而不是静默失败。
+      async llm(input) {
+        const models = await cloud.llm.models.list();
+        const model = (models || []).find((m) => m && m.disabled !== true);
+        if (!model) throw Object.assign(new Error("云端暂无可用模型，请稍后再试"), { code: "no_model" });
+        let text = "";
+        for await (const chunk of cloud.llm.chat.completions.create({
+          model: model.id,
+          messages: input.messages,
+          stream: true,
+          temperature: input.temperature == null ? 1 : input.temperature,
+          signal: input.signal,
+        })) {
+          const delta = chunk.choices && chunk.choices[0] && chunk.choices[0].delta && chunk.choices[0].delta.content;
+          if (delta) {
+            text += delta;
+            if (typeof input.onDelta === "function") input.onDelta(delta);
+          }
+        }
+        return { text, model: model.id };
+      },
     };
   }
 
