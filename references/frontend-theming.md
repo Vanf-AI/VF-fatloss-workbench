@@ -25,6 +25,35 @@
 - 个别需按主题微调的组件（圆角、边框、激活态、字体斜体）用 `:root[data-theme="…"] .selector` 精确覆写，不改组件主结构。
 - 图表（SVG 内联）同样用 `var(--primary)` / `var(--accent)` / `var(--line)`，切主题时自动跟随。
 
+## 档案头「当前体重」hero（主视觉）
+
+档案头（`.profile-header`）是四个 tab 共用的常驻区域，也是页面第一眼区域，因此把**当前体重**放这里做主视觉：
+
+```text
+YOUR FATLOSS PLAN
+当前体重 · 最近记录 09-29          [DAILY 1859 kcal]
+75.2 kg
+↓ 2.3 kg 较起始  距目标 5.2 kg  起始 77.5 kg
+男 · 生活化减脂
+起始 2026-08-29 · 每周 4.5 小时 / 5 次
+每日目标：碳水 … · 蛋白 … · 脂肪 …
+[第 32 / 90 天 · 剩 58 天]  [进度条]
+```
+
+**关键数据口径（容易写错）**：`profile.weight` 是**建档起始体重**，不随减重变化；「当前体重」必须取 `logs` 里**日期最大**的一条 `weight`，**没有记录时才回落到起始体重**。早期版本把 `profile.weight` 直接写进标题当「当前体重」，减重后显示的就是错的。统一走 `currentWeightInfo()`：
+
+```js
+currentWeightInfo() → { startWeight, value, date, isLogged }
+```
+
+- `value` 已含回落逻辑；`isLogged` 区分实测值与起始值，避免把起始体重冒充成当前值。
+- `fatlossProgress()` 与「我的 → 档案」都复用同一个 helper，不许各自再遍历一遍 `logs`。
+- 提交今日状态后要**主动调一次 `renderProfileHeader()`**：体重变了 hero 必须立刻更新，而提交流程不会触发整页 `render()`。
+
+**标签语义**：`↓ x kg 较起始`（降 = `--primary-soft` 底）/ `↑ x kg`（升 = `--accent-soft` 底）/ `与起始持平` / `距目标 x kg`（仍在目标之上）/ `已达成目标 ✓`（达到或低于目标）。无 `targetWeight` 时不出目标标签。
+
+**三主题表达**：数字走 `var(--font-display)`（有机衬线 / 仪表等宽 / 杂志 Playfair），字号 `clamp(44px, 12vw, 64px)`；标签走 `var(--font-mono)` 小字宽字距。仪表风把标签与 chip 改方角 + 大写，杂志风把标签换成金色斜体衬线。
+
 ## 切换机制（app.mjs）
 
 - `setupTheme()`：读 `localStorage.fatloss_theme` → `applyTheme()`；给 `#themeSwitch` 绑定 click 委托。

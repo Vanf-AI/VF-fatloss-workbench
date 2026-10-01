@@ -64,11 +64,50 @@ weeklyDropPct = (首日体重 − 末日体重) / 首日体重 × 100 × 7 / 跨
 ## 输出与闸门
 
 - **`goal`**：`carb / protein / fat / kcal` 覆盖为新目标；同时维护 `reviewDay`、`stageBaselineWeight`、`adjustLog`。
-- **`reviews[]`**：`{ day, windowStart, windowEnd, message, nextGoal, confirmed, confirmedAt }`；`message` 说明判定依据。
-- **`goal.adjustLog[]`**：`{ at, windowStart, windowEnd, verdict, deltaCarb, stageReset }`。**同一 `windowEnd` 已存在记录时禁止再次应用**——这是「同次不叠加」的第二道闸门，防止用户重复点击造成碳水连续下调。
+- **`reviews[]`**：`{ day, windowStart, windowEnd, message, nextGoal, manual, confirmed, confirmedAt }`；`message` 说明判定依据。
+- **`goal.adjustLog[]`**：`{ at, windowStart, windowEnd, verdict, deltaCarb, stageReset, manual, override, carbAfter }`。**同一 `windowEnd` 已存在记录时引擎建议不再重复应用**——这是「同次不叠加」的第二道闸门，防止用户重复点击造成碳水连续下调。注意：闸门拦的是**引擎判定**的重复叠加；用户显式的人工覆盖走 `override` 通道（见下节），不被它拦住。
 - **未确认不得覆盖 `goal`**。
 - **归档**：复盘摘要同步写入 `history.reviews[]`；被替换的 `weeklyPlan` 归档到 `history.weeks[]`（只读、不重算）。
 
+## 手动调整碳蛋脂（工作台内）
+
+引擎给出的 `nextGoal` 只是建议，用户始终可以改。**编辑器不依赖引擎是否就绪**——只要 `goal` 存在就渲染，这是刻意的解耦：手动调整是用户的固有权利，不该被「记录不足 3 天」或「本窗口已生效」挡住。
+
+三个输入框（碳水 / 蛋白 / 脂肪）以初值为基准，改动后实时联动合计热量与变化列，显示「已手动微调」标记，「恢复建议值」一键回退。按引擎状态分三条路径：
+
+| 路径 | 条件 | 初值口径 | 按钮 / 写入语义 |
+| --- | --- | --- | --- |
+| ① 手动微调 | 引擎就绪，本窗口未应用过 | 引擎建议值（`nextGoal`），无建议则取当前 `goal` | 「确认并生效（手动）」；`manual: true`、`override: false`，`deltaCarb` 仍记引擎值 |
+| ② 人工覆盖 | 引擎就绪，但本窗口已应用过（`alreadyAdjusted`） | **当前 `goal`**（引擎新建议本窗口不再生效，不该拿它当参照） | 默认置灰「本窗口已生效」，一旦改数即变「按我的数字覆盖目标」；写入 `override: true`、`deltaCarb: 0`、`stageReset: false`（不重置阶段基准） |
+| ③ 手动设定 | 引擎未就绪（体重记录 < 3 天等），但已有 `goal` | 当前 `goal` | 「写入手动目标」；必须真的改动过数字才可点；写入 `verdict: "manual"`、窗口取最近一条体重日 |
+
+共通规则：
+
+- 确认后 `reviews[].manual` 与 `goal.adjustLog[].manual` 为 `true`，`message` 追加一句「手动微调 / 人工覆盖 / 手动设定为 X / Y / Z」，便于事后区分这次是引擎判的还是人改的。
+- `adjustLog[].carbAfter` 记录该次生效后的实际碳水值——手动调整时它与 `deltaCarb` 不再等价，看 `carbAfter` 才准。
+- 路径 ① 与 ② 的差别只在「本窗口引擎建议是否已生效」；**两条路径都不会产生第二次引擎叠加**，路径 ② 的 `deltaCarb` 强制记 0。
+- `goal` 完全不存在（record-only 模式）时**不渲染编辑器**，只提示先在对话里生成第一版方案——目标系数应由方法口径产出，不该让人凭空填三个数。
+
+## 复盘卡上的三个配置（都保存即生效）
+
+复盘卡在目标编辑器下方依次排列三个配置块，**它们是排餐的全部参数入口**，餐单卡不再重复提供：
+
+| 配置块 | 字段 | 作用 |
+| --- | --- | --- |
+| 餐次主食安排 | `pack.staples` | 早 / 午 / 晚各用什么主食，空数组 = 该餐不限定 |
+| 餐次蛋白安排 | `pack.proteins` | 早 / 午 / 晚各用什么蛋白来源，空数组 = 该餐不限定 |
+| 每日固定脂肪 | `pack.fatFixes` | 早餐南瓜子 / 晚餐混合坚果的每日固定克数 |
+
+- 前两者是「按餐次多选」，共用同一个选择器实现（`openMealMultiPicker` → `openStaplePicker` / `openProteinPicker`）；后者是「按餐次单选的食材 + 克数」（`openFatFixPicker`）。
+- 三者都是**保存即持久化**，不依赖复盘「确认并生效」——挑主食、挑蛋白、定固定脂肪和改目标是三件独立的事。
+- 详细口径见 [planning.md](planning.md) 的「餐次主食安排 / 餐次蛋白安排 / 每日固定脂肪」。
+
+### 为什么删掉了「下一阶段优先食材」
+
+早期复盘卡上还有第四块「下一阶段优先食材」（存 `foodLibrary.selected[]`，排餐时优先取用）。三块按餐次的硬口径上线后它就成了多余的一层：主食 / 蛋白 / 固定脂肪已经**逐餐次**把「吃什么」定死，再叠一层跨餐次的「优先」，两套规则会互相打架（例如优先食材里勾了鸡胸，但午餐候选没勾，算法到底听谁的）。
+
+因此该块已整体移除，`preferredFoods()` / `rankByPreference()` / `openPreferredFoodPicker()` 一并删除。`foodLibrary.selected` 字段**已废弃**：新数据不再写入，旧数据里残留不影响运行（`protocol.mjs` 仅在它存在时校验类型，不再强制要求）。
+
 ## 下一阶段餐单
 
-复盘只产出**目标数字**。要得到下一阶段的 7 天餐单，由工作台「下一阶段餐单」卡调用云端大模型，按 `nextGoal` + 食材库生成，通过结构校验后由用户点「应用到本周计划」写入。生成契约见 [planning.md](planning.md)。
+复盘只产出**目标数字**。要得到下一阶段的 7 天餐单，由工作台「下一阶段餐单」卡用**本地确定性算法**按 `nextGoal` + 食材库解算（不调大模型，同步计算、任何设备可用），通过结构校验后由用户点「应用到本周计划」写入。生成契约见 [planning.md](planning.md)。

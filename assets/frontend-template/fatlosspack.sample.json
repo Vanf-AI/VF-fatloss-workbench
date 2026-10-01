@@ -43,6 +43,11 @@
     "hidden": [],
     "custom": []
   },
+  "staples": {
+    "breakfast": ["oats"],
+    "lunch": ["rice"],
+    "dinner": ["sweet-potato", "purple-potato", "potato", "beibei-pumpkin"]
+  },
   "weeklyPlan": {
     "confirmed": true,
     "weekIndex": 1,

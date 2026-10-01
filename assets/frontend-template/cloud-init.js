@@ -3,11 +3,10 @@
 (function () {
   "use strict";
 
-  // 部署时替换：endpoint / publishableKey 来自 workbuddy_cloud_service(activate) 返回的 publicConfig。
-  // 严禁把真实凭据写进模板提交（本文件会随站点公开部署）。
   var CONFIG = {
-    endpoint: "__FATLOSS_ENDPOINT__",
-    publishableKey: "__FATLOSS_PUBLISHABLE_KEY__",
+    // 部署时替换为真实值（发布为应用后由云服务提供）
+    endpoint: "replace-at-deploy-time",
+    publishableKey: "replace-at-deploy-time",
   };
   var TABLE = "fatloss_documents";
   var DEFAULT_PACK = window.__FATLOSS_DEFAULT_PACK__ || null;
@@ -88,10 +87,9 @@
       },
       // 可选能力：把云端免密钥大模型封装成一次「收集完整文本」的调用。
       // 必须首条为 system 消息（SDK 不代插）；onDelta 用于流式回调。
-      // 未注入此方法时，前端 callLlm() 会抛出 no_llm 并给出降级提示，而不是静默失败。
       async llm(input) {
         const models = await cloud.llm.models.list();
-        const model = (models || []).find((m) => m && m.disabled !== true);
+        const model = (models || []).find((m) => m && m.disabled !== true && m.enabled !== false);
         if (!model) throw Object.assign(new Error("云端暂无可用模型，请稍后再试"), { code: "no_model" });
         let text = "";
         for await (const chunk of cloud.llm.chat.completions.create({
@@ -257,15 +255,10 @@
     if (appLoaded) return;
     appLoaded = true;
     hideLogin();
-    await import("./app.mjs?v=1");
+    await import("./app.mjs?v=24");
   }
 
   async function boot() {
-    // 未部署（endpoint 仍是占位符）时，跳过云登录，直接加载 app.mjs 走本地 demo 模式。
-    if (CONFIG.endpoint.indexOf("__") === 0) {
-      await loadApp();
-      return;
-    }
     initCloud();
     injectAdapter();
     try {

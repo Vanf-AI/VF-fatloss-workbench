@@ -331,6 +331,60 @@ button { font-family: inherit; letter-spacing: 0.02em; }
 .goal-stamp small { font-size: 11px; opacity: 0.85; }
 .profile-note { margin: 12px 0 0; font-size: var(--fs-sm); color: var(--muted); }
 
+/* —— 当前体重 hero：档案头主视觉 ——
+   设计意图：把「当前体重」做成页面第一眼看到的数字，而不是藏在标题文字里。
+   字号用 clamp，窄屏不过曝；数字走主题的 display 字体，三种风格各自成立。 */
+.weight-hero { min-width: 0; }
+.weight-hero .weight-label {
+  margin: 0; font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: 600;
+  letter-spacing: 0.14em; color: var(--muted); text-transform: uppercase;
+}
+.weight-hero .weight-label span {
+  margin-left: 8px; font-family: var(--font-body); font-size: 11px; font-weight: 400;
+  letter-spacing: 0.02em; color: var(--hint); text-transform: none;
+}
+.weight-hero .weight-figure {
+  margin: 4px 0 0; display: flex; align-items: baseline; gap: 8px; line-height: 1;
+}
+.weight-hero .weight-figure b {
+  font-family: var(--font-display); font-size: clamp(44px, 12vw, 64px); font-weight: 700;
+  letter-spacing: -0.035em; color: var(--text); font-variant-numeric: tabular-nums;
+}
+.weight-hero .weight-unit {
+  font-family: var(--font-mono); font-size: var(--fs-md); font-weight: 500; color: var(--muted);
+}
+.weight-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.weight-chip {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  padding: 3px 10px; border-radius: var(--r-full);
+  border: 1px solid var(--line); background: var(--bg-soft);
+  font-family: var(--font-mono); font-size: 12px; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.weight-chip em { font-family: var(--font-body); font-style: normal; font-size: 11px; opacity: 0.72; }
+.weight-chip.down { border-color: transparent; background: var(--primary-soft); color: var(--primary-deep); }
+.weight-chip.up { border-color: transparent; background: var(--accent-soft); color: var(--text); }
+.weight-chip.goal { background: transparent; }
+.weight-chip.done { border-color: transparent; background: var(--primary); color: #fff; }
+.profile-subline {
+  margin: 16px 0 0; font-family: var(--font-body); font-size: var(--fs-base);
+  font-weight: 600; color: var(--text);
+}
+.profile-header-inner > #profileMeta { margin: 6px 0 0; font-size: var(--fs-sm); color: var(--muted); }
+
+/* 三主题表达：仪表风方角等宽、杂志风衬线斜体标签 */
+:root[data-theme="industrial"] .weight-chip { border-radius: 0; text-transform: uppercase; }
+:root[data-theme="industrial"] .weight-chip.down { color: var(--primary); }
+:root[data-theme="industrial"] .weight-hero .weight-label { color: var(--primary); }
+:root[data-theme="industrial"] .profile-subline { text-transform: uppercase; letter-spacing: 0.08em; }
+:root[data-theme="editorial"] .weight-chip { border-radius: 0; }
+:root[data-theme="editorial"] .weight-hero .weight-label {
+  font-family: var(--font-display); font-style: italic; text-transform: none;
+  font-size: 13px; letter-spacing: 0.02em; color: var(--accent);
+}
+:root[data-theme="editorial"] .weight-hero .weight-figure b { letter-spacing: -0.02em; }
+:root[data-theme="editorial"] .profile-subline { font-family: var(--font-display); font-size: var(--fs-md); }
+
 /* ==========================================================================
    计划进度
    ========================================================================== */
@@ -848,7 +902,8 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(3px); }
   .macro-grid { grid-template-columns: repeat(2, 1fr); }
   .meal-macros.cols-4 { grid-template-columns: repeat(2, 1fr); }
   .profile-title-row { flex-direction: column; }
-  .profile-title-row h1 { font-size: 24px; }
+  .weight-hero .weight-figure b { font-size: 52px; }
+  .goal-stamp { padding: 10px 16px; }
   .topbar { padding: 12px 16px; }
   .module-nav { padding: 8px 16px; }
   main { padding: 10px 16px 40px; }
@@ -956,6 +1011,83 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(3px); }
 .advisor-note { font-size: 12px; color: var(--muted); }
 .advisor-actions .text-button { margin-left: auto; }
 
+/* —— 下一阶段目标：可手动微调 —— */
+.goal-editor { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-bottom: 16px; }
+.ge-title {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 14px; background: var(--bg-soft); border-bottom: 1px solid var(--line);
+}
+.ge-title b { font-size: 13px; color: var(--text); }
+.ge-badge { font-size: 11px; padding: 2px 9px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
+.ge-reset { margin-left: auto; font-size: 12px; padding: 5px 12px; }
+.ge-rows { padding: 2px 0; }
+.ge-row {
+  display: grid; grid-template-columns: 48px 1fr 16px 92px 16px 1fr;
+  align-items: center; gap: 8px; padding: 8px 14px;
+  font-family: var(--font-mono); font-size: 12px; color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.ge-name { font-family: var(--font-body); color: var(--muted); }
+.ge-from { text-align: right; color: var(--hint); text-decoration: line-through; }
+.ge-arrow { text-align: center; color: var(--hint); }
+.ge-unit { color: var(--muted); }
+.ge-diff { text-align: right; }
+.ge-input {
+  width: 100%; padding: 5px 8px; text-align: right;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--card-bg); color: var(--text);
+  font-family: var(--font-mono); font-size: 13px; font-variant-numeric: tabular-nums;
+}
+.ge-input:focus { outline: none; border-color: var(--primary); }
+.ge-kcal {
+  display: flex; align-items: center; gap: 8px; justify-content: flex-end;
+  padding: 9px 14px; border-top: 1px solid var(--line); background: var(--bg-soft);
+  font-family: var(--font-mono); font-size: 12px; color: var(--muted);
+}
+.ge-kcal b { font-size: 15px; color: var(--primary-deep); font-variant-numeric: tabular-nums; }
+.ge-note { margin: 0; padding: 10px 14px 12px; font-size: 12px; line-height: 1.65; color: var(--hint); }
+
+/* —— 复盘卡的食材口径区（主食 / 蛋白 / 固定脂肪三块共用外壳）—— */
+.food-pref { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; }
+.fp-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.fp-head b { font-size: 13px; color: var(--text); }
+.fp-head .text-button { margin-left: auto; font-size: 12px; padding: 5px 12px; }
+.fp-note { margin: 10px 0 0; font-size: 12px; line-height: 1.6; color: var(--hint); }
+
+/* —— 餐次主食安排（复盘卡摘要 + 选择器）—— */
+.staple-pref .staple-lines { display: flex; flex-direction: column; gap: 7px; }
+.staple-line { display: flex; align-items: baseline; gap: 10px; font-size: 12px; }
+.staple-meal { flex: none; min-width: 32px; font-weight: 600; color: var(--muted); }
+.staple-names { color: var(--text); line-height: 1.5; }
+
+.staple-body { padding: 0 20px; }
+.staple-sections { display: flex; flex-direction: column; gap: 14px; padding-bottom: 8px; }
+.staple-section { border: 1px solid var(--line); border-radius: 9px; padding: 12px 14px; }
+.staple-sec-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.staple-sec-head b { font-size: 13px; color: var(--text); }
+.staple-sec-count { margin-left: auto; font-size: 12px; color: var(--hint); }
+.staple-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.staple-chip { cursor: pointer; font: inherit; color: var(--muted); }
+.staple-chip.on { background: var(--primary); color: #fff; border-color: var(--primary); }
+
+/* —— 每日固定脂肪（复盘卡摘要沿用 .staple-* 结构；这里是选择器专有样式）—— */
+.fatfix-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.fatfix-amount-label { font-size: 12px; color: var(--muted); }
+.fatfix-amount {
+  width: 82px; padding: 6px 9px; font: inherit; font-size: 13px;
+  color: var(--text); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 8px;
+}
+.fatfix-amount:focus { outline: none; border-color: var(--primary); }
+.fatfix-unit { font-size: 12px; color: var(--muted); }
+
+/* 预览里的主食偏离提示（非阻断） */
+.sp-staple-warn {
+  margin-top: 8px; font-size: 12px; line-height: 1.6;
+  color: var(--text); background: var(--plan-bg);
+  border-left: 3px solid var(--accent); padding: 6px 10px; border-radius: 4px;
+}
+
 /* —— 下一阶段餐单 —— */
 .studio-idle { display: flex; flex-direction: column; gap: 14px; }
 .studio-goal {
@@ -965,17 +1097,6 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(3px); }
 .studio-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .studio-note { font-size: 12px; color: var(--muted); }
 .studio-row .text-button { margin-left: auto; }
-
-.studio-running {
-  display: flex; flex-direction: column; gap: 10px;
-  padding: 18px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-soft);
-}
-.studio-bar { height: 4px; border-radius: 999px; background: var(--line); overflow: hidden; }
-.studio-bar-fill { height: 100%; width: 40%; border-radius: 999px; background: var(--primary); animation: studioSlide 1.2s ease-in-out infinite; }
-@keyframes studioSlide { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }
-@media (prefers-reduced-motion: reduce) { .studio-bar-fill { animation: none; margin-left: 30%; } }
-.studio-run-text { font-size: 13px; color: var(--text); }
-.studio-run-meta { font-family: var(--font-mono); font-size: 11px; color: var(--hint); }
 
 .studio-error {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
@@ -1005,21 +1126,33 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(3px); }
 /* 主题微调：工业风方角 / 杂志风衬线 */
 :root[data-theme="industrial"] .am-cell,
 :root[data-theme="industrial"] .goal-compare,
+:root[data-theme="industrial"] .goal-editor,
+:root[data-theme="industrial"] .food-pref,
+:root[data-theme="industrial"] .ge-input,
 :root[data-theme="industrial"] .studio-goal,
 :root[data-theme="industrial"] .sp-day,
 :root[data-theme="industrial"] .studio-running,
 :root[data-theme="industrial"] .studio-error,
-:root[data-theme="industrial"] .advisor-verdict { border-radius: 0; }
+:root[data-theme="industrial"] .advisor-verdict,
+:root[data-theme="industrial"] .fatfix-amount,
+:root[data-theme="industrial"] .staple-section { border-radius: 0; }
 :root[data-theme="editorial"] .am-cell,
 :root[data-theme="editorial"] .goal-compare,
+:root[data-theme="editorial"] .goal-editor,
+:root[data-theme="editorial"] .food-pref,
 :root[data-theme="editorial"] .studio-goal,
 :root[data-theme="editorial"] .sp-day,
-:root[data-theme="editorial"] .advisor-verdict { border-radius: 0; }
+:root[data-theme="editorial"] .advisor-verdict,
+:root[data-theme="editorial"] .fatfix-amount,
+:root[data-theme="editorial"] .staple-section { border-radius: 0; }
 :root[data-theme="editorial"] .studio-goal { font-family: var(--font-display); font-style: italic; }
 
 @media (max-width: 860px) {
   .advisor-metrics { grid-template-columns: repeat(2, 1fr); }
   .gc-row { grid-template-columns: 1.1fr 1fr 1fr 1fr; }
+  .ge-row { grid-template-columns: 40px 1fr 12px 70px 12px 1fr; gap: 5px; padding: 8px 10px; font-size: 11px; }
+  .ge-input { font-size: 12px; padding: 4px 6px; }
+  .ge-note { padding: 10px 12px; }
   .studio-actions { flex-direction: column; }
   .studio-actions .text-button:last-child { margin-left: 0; }
 }

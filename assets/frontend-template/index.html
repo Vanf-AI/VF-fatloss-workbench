@@ -13,7 +13,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
   <!-- 杂志风：Playfair Display + Source Serif 4 -->
   <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,700;1,600&family=Source+Serif+4:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/app.css?v=14">
+  <link rel="stylesheet" href="/app.css?v=24">
 </head>
 <body>
   <!-- 氛围层：纸质噪点 + 两团柔光，营造“餐食记录”的温润质感 -->
@@ -45,12 +45,18 @@
     <div class="profile-header-inner">
       <p class="eyebrow">YOUR FATLOSS PLAN</p>
       <div class="profile-title-row">
-        <div>
-          <h1 id="profileTitle"></h1>
-          <p id="profileMeta"></p>
+        <div class="weight-hero">
+          <p class="weight-label" id="weightLabel">当前体重</p>
+          <p class="weight-figure">
+            <b id="weightNow">—</b>
+            <span class="weight-unit">kg</span>
+          </p>
+          <div class="weight-chips" id="weightChips"></div>
         </div>
         <div class="goal-stamp" aria-hidden="true"><span>DAILY</span><b id="goalKcal">—</b><small>kcal</small></div>
       </div>
+      <h1 class="profile-subline" id="profileTitle"></h1>
+      <p id="profileMeta"></p>
       <p class="profile-note" id="profileNote"></p>
     </div>
   </section>
@@ -93,6 +99,32 @@
 
   <script src="https://unpkg.com/@tencent-ai/workbuddy-cloud-sdk@dev/lib/index.global.js"></script>
   <script src="/default-pack.js?v=2"></script>
-  <script src="/cloud-init.js?v=14"></script>
+  <script src="/cloud-init.js?v=24"></script>
+  <script>
+    // 版本自愈探针：托管站点不给 Cache-Control，浏览器会对 index.html 做启发式缓存，
+    // 于是出现「代码已发布、页面还是旧版」（历史上就踩过一次：复盘卡上残留了已删除的栏目）。
+    // 这里只在**页面加载时**探一次 build.json（带时间戳绕开缓存）：
+    // 线上 build 比自己新 → 带 ?b=<新版本> 重开一次，换一个缓存键，用户不必手动强刷。
+    // 只用 location.replace，且 sessionStorage 记一次，绝不循环。
+    (function () {
+      var tag = document.querySelector('script[src*="cloud-init.js"]');
+      var m = tag && /[?&]v=(\d+)/.exec(tag.getAttribute("src") || "");
+      if (!m) return;
+      var BUILD = m[1];
+      fetch("/build.json?t=" + Date.now(), { cache: "no-store" })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+          var online = d && String(d.build || "");
+          if (!online || online === BUILD) return;
+          var key = "fatloss.build.jump";
+          try {
+            if (sessionStorage.getItem(key) === online) return; // 已跳过一次，防死循环
+            sessionStorage.setItem(key, online);
+          } catch (e) { /* 隐私模式下无 sessionStorage：只跳一次也够用 */ }
+          location.replace(location.pathname + "?b=" + encodeURIComponent(online));
+        })
+        .catch(function () { /* 离线或探针失败：保持现状即可 */ });
+    })();
+  </script>
 </body>
 </html>

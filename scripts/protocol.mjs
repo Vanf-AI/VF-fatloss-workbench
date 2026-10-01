@@ -116,9 +116,13 @@ export function validateFatLossPack(pack) {
   const fl = pack.foodLibrary;
   if (!isObj(fl)) err("foodLibrary", "缺失或非对象");
   else {
-    for (const k of ["selected", "hidden", "custom"]) {
+    // selected 已废弃（原「下一阶段优先食材」，现由餐次主食 / 蛋白 / 固定脂肪三块口径取代）。
+    // 新数据不再写入；旧数据里可能残留，存在时仍做类型校验，不强制要求。
+    for (const k of ["hidden", "custom"]) {
       if (!Array.isArray(fl[k])) err(`foodLibrary.${k}`, "应为数组");
     }
+    if (fl.selected !== undefined && !Array.isArray(fl.selected))
+      err("foodLibrary.selected", "应为数组（已废弃字段）");
     if (Array.isArray(fl.hidden)) {
       fl.hidden.forEach((id, i) => {
         if (!isStr(id)) err(`foodLibrary.hidden[${i}]`, "应为内置食材 id 字符串");
@@ -139,6 +143,38 @@ export function validateFatLossPack(pack) {
         if (c.category !== undefined && !isStr(c.category))
           err(`foodLibrary.custom[${i}].category`, "应为字符串");
       });
+    }
+  }
+
+  // 按餐次多选的候选口径：staples / proteins 同构
+  // （staples：早餐燕麦 / 午餐大米 / 晚餐薯类轮换；proteins：早餐全蛋 / 午餐白肉虾仁 / 晚餐瘦牛肉）
+  // 字段缺失 = 前端用谭师默认口径；某餐为空数组 = 该餐不限定。
+  for (const field of ["staples", "proteins"]) {
+    if (pack[field] === undefined || pack[field] === null) continue;
+    if (!isObj(pack[field])) { err(field, "应为对象"); continue; }
+    for (const k of ["breakfast", "lunch", "dinner"]) {
+      const v = pack[field][k];
+      if (v === undefined) continue;
+      if (!Array.isArray(v)) err(`${field}.${k}`, "应为数组");
+      else v.forEach((id, i) => {
+        if (!isStr(id)) err(`${field}.${k}[${i}]`, "应为食材 id 字符串");
+      });
+    }
+  }
+
+  // fatFixes（可选；每日固定脂肪：早餐南瓜子 / 晚餐混合坚果，其余脂肪由烹调油补足）
+  // 字段缺失 = 前端用默认 10g / 15g；amount 为 0 或 id 为空 = 取消该项。
+  if (pack.fatFixes !== undefined && pack.fatFixes !== null) {
+    if (!isObj(pack.fatFixes)) err("fatFixes", "应为对象");
+    else {
+      for (const k of ["breakfast", "dinner"]) {
+        const v = pack.fatFixes[k];
+        if (v === undefined) continue;
+        if (!isObj(v)) { err(`fatFixes.${k}`, "应为对象"); continue; }
+        if (v.id !== undefined && !isStr(v.id)) err(`fatFixes.${k}.id`, "应为食材 id 字符串");
+        if (v.amount !== undefined && (!isNum(v.amount) || v.amount < 0))
+          err(`fatFixes.${k}.amount`, "应为非负数（克）");
+      }
     }
   }
 

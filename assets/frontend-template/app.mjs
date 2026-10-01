@@ -1,7 +1,9 @@
 // 减脂工作台前端逻辑：消费 FatLossPack 1.0.0，渲染四区（今日/本周/复盘/我的），
 // 支持记录四餐、主动配平、体重趋势图、导入导出。纯原生无框架。
 
-import { createFatLossHostAdapter } from "./host-adapter.mjs";
+// 注意：静态资源（含模块）必须带 ?v= 版本号，否则 CDN 会按完整 URL 命中旧缓存。
+// 版本号同步点：本文件 import、cloud-init.js 的 import("./app.mjs?v=")、index.html 的 app.css/cloud-init.js。
+import { createFatLossHostAdapter } from "./host-adapter.mjs?v=24";
 
 const METHOD_NAMES = {
   lifestyle: "生活化减脂",
@@ -96,23 +98,8 @@ async function cloudFetch(resource, options = {}) {
   }
 }
 
-// 通过宿主 adapter 调用云端大模型（免密钥）。宿主未提供该能力时抛错，由调用方降级提示。
-async function callLlm(messages, options = {}) {
-  const hostAdapter = window.FATLOSS_HOST_ADAPTER || null;
-  if (!hostAdapter) {
-    throw Object.assign(new Error("当前是本地模式，云端大模型不可用"), { code: "no_cloud" });
-  }
-  const adapter = createFatLossHostAdapter(hostAdapter);
-  if (typeof adapter.llm !== "function") {
-    throw Object.assign(new Error("当前宿主未提供大模型通道"), { code: "no_llm" });
-  }
-  return adapter.llm({
-    messages,
-    onDelta: options.onDelta,
-    temperature: options.temperature,
-    signal: options.signal,
-  });
-}
+// 排餐已改为纯本地确定性算法，不再调用云端大模型 —— 原 callLlm() 已整体移除。
+// 宿主适配器的 llm 通道仍保留在契约里（见 host-adapter.mjs），但本应用不再使用。
 
 function detectMode() {
   if (window.FATLOSS_HOST_ADAPTER) return window.FATLOSS_HOST_ADAPTER.mode === "read" ? "read" : "edit";
@@ -144,6 +131,8 @@ async function loadPack() {
 const round1 = (n) => Math.round(n * 10) / 10;
 // 展示用：统一保留 1 位小数（如 36 → "36.0"，避免浮点长串小数）
 const fmtNum = (n) => round1(Number(n) || 0).toFixed(1);
+// "2026-09-22" → "09-22"；空值返回占位符
+const shortDate = (d) => (d ? String(d).slice(5) : "—");
 
 // 统一类型（6 类）：主食 / 蛋白质 / 脂肪 / 水果 / 蔬菜 / 其他
 const FOOD_TYPES = ["主食", "蛋白质", "脂肪", "水果", "蔬菜", "其他"];
@@ -164,7 +153,7 @@ function foodType(f) {
 
 async function loadFoodDb() {
   try {
-    const res = await fetch("/fooddb.json");
+    const res = await fetch("/fooddb.json?v=24");
     if (res.ok) state.foodDb = (await res.json()).items || [];
   } catch (e) {
     state.foodDb = [];
@@ -262,6 +251,169 @@ function foodMacros(food, amount) {
   };
 }
 
+// ==========================================================================
+// 餐次主食安排（谭师口径）
+// 内核：碳水按「GI + 饱腹感 + 活动量」匹配餐次——白天活动多、需快速供能 → 米面；
+// 晚间活动少、要压住食欲 → 高纤低 GI 的薯类。原始口径见 methods/lifestyle.md 三餐结构表。
+// 存于 pack.staples；字段缺失 = 用下面的默认；某餐为空数组 = 该餐不限定主食。
+// ==========================================================================
+const DEFAULT_STAPLES = {
+  breakfast: ["oats"],
+  lunch: ["rice"],
+  dinner: ["sweet-potato", "purple-potato", "potato", "beibei-pumpkin"],
+};
+const STAPLE_MEALS = [
+  { key: "breakfast", name: "早餐" },
+  { key: "lunch", name: "午餐" },
+  { key: "dinner", name: "晚餐" },
+];
+// 餐名 → pack.staples 键（预览合规提示按餐名反查）
+const STAPLE_KEY_BY_MEAL = { "早餐": "breakfast", "午餐": "lunch", "晚餐": "dinner" };
+
+// 主食候选池：归一后属于「主食」的食材。
+function staplePool() {
+  return allFoods().filter((f) => f && f.name && foodType(f) === "主食");
+}
+
+// 当前生效的餐次主食口径。过滤掉已隐藏 / 已删除的 id，避免历史配置指向不存在的食材。
+function mealStaples() {
+  const saved = state.pack?.staples;
+  const out = {};
+  for (const m of STAPLE_MEALS) {
+    const raw = Array.isArray(saved?.[m.key]) ? saved[m.key] : DEFAULT_STAPLES[m.key];
+    out[m.key] = raw.filter((id) => !!findFood(id));
+  }
+  return out;
+}
+
+// 某餐主食的名称列表（展示与提示词共用一份口径）
+function stapleNames(key, staples) {
+  const s = staples || mealStaples();
+  return (s[key] || []).map((id) => findFood(id)?.name).filter(Boolean);
+}
+
+// 与谭师默认口径是否一致（用于「恢复口径」按钮的可用状态）
+function isDefaultStaples(s) {
+  return STAPLE_MEALS.every((m) => {
+    const a = (s[m.key] || []).join(",");
+    const b = DEFAULT_STAPLES[m.key].filter((id) => !!findFood(id)).join(",");
+    return a === b;
+  });
+}
+
+// ==========================================================================
+// 餐次蛋白安排（谭师口径）
+// 与主食同源：蛋白来源也按餐次固定——早餐全蛋、午餐白肉或虾仁、晚餐瘦牛肉，
+// 否则 7 天轮换会排出「午餐 7 个鸡蛋」这种不成立的组合。
+// 原始口径见 references/methods/lifestyle.md 三餐结构表。
+// 存于 pack.proteins；字段缺失 = 用下面的默认；某餐为空数组 = 该餐不限定蛋白。
+// ==========================================================================
+const DEFAULT_PROTEINS = {
+  breakfast: ["egg"],
+  lunch: ["chicken-breast", "chicken-thigh", "basa-fish", "mackerel", "shrimp"],
+  dinner: ["beef-lean"],
+};
+const PROTEIN_MEALS = [
+  { key: "breakfast", name: "早餐" },
+  { key: "lunch", name: "午餐" },
+  { key: "dinner", name: "晚餐" },
+];
+const PROTEIN_KEY_BY_MEAL = { "早餐": "breakfast", "午餐": "lunch", "晚餐": "dinner" };
+
+// 蛋白候选池：归一后属于「蛋白质」的食材（肉类蛋白 + 蛋奶 + 蛋白粉）。
+function proteinPool() {
+  return allFoods().filter((f) => f && f.name && foodType(f) === "蛋白质");
+}
+
+// 当前生效的餐次蛋白口径。过滤掉已隐藏 / 已删除的 id，避免历史配置指向不存在的食材。
+function mealProteins() {
+  const saved = state.pack?.proteins;
+  const out = {};
+  for (const m of PROTEIN_MEALS) {
+    const raw = Array.isArray(saved?.[m.key]) ? saved[m.key] : DEFAULT_PROTEINS[m.key];
+    out[m.key] = raw.filter((id) => !!findFood(id));
+  }
+  return out;
+}
+
+// 某餐蛋白源的名称列表（展示与排餐共用一份口径）
+function proteinNames(key, proteins) {
+  const s = proteins || mealProteins();
+  return (s[key] || []).map((id) => findFood(id)?.name).filter(Boolean);
+}
+
+// 与谭师默认口径是否一致（用于「恢复口径」按钮的可用状态）
+function isDefaultProteins(s) {
+  return PROTEIN_MEALS.every((m) => {
+    const a = (s[m.key] || []).join(",");
+    const b = DEFAULT_PROTEINS[m.key].filter((id) => !!findFood(id)).join(",");
+    return a === b;
+  });
+}
+
+// ==========================================================================
+// 每日固定脂肪（谭师口径）
+// 南瓜子（早餐）与混合坚果（晚餐）是**每天固定**的摄入量，只按天重复、不参与轮换，
+// 也不作为可调脂肪源；其余脂肪一律由烹调油在午餐 / 晚餐补足。
+// 存于 pack.fatFixes；字段缺失 = 用下面的默认；amount 设为 0 = 该项取消。
+// 注：原方法论三餐结构表只写了「南瓜子 / 混合坚果」，未给克数，默认值由用户设定。
+// ==========================================================================
+const DEFAULT_FAT_FIXES = {
+  breakfast: { id: "pumpkin-seed", amount: 10 },
+  dinner: { id: "mixed-nuts", amount: 15 },
+};
+const FAT_FIX_MEALS = [
+  { key: "breakfast", name: "早餐" },
+  { key: "dinner", name: "晚餐" },
+];
+const FAT_FIX_KEY_BY_MEAL = { "早餐": "breakfast", "晚餐": "dinner" };
+
+// 可选作固定脂肪的食材：坚果类（纯油脂另走「烹调油」口径，不进这里）。
+function fatFixPool() {
+  return allFoods().filter(
+    (f) => f && f.name && foodType(f) === "脂肪" && !isZeroMacro(f) && !(Number(f.carb) === 0 && Number(f.protein) === 0)
+  );
+}
+
+// 当前生效的每日固定脂肪口径
+function mealFatFixes() {
+  const saved = state.pack?.fatFixes;
+  const out = {};
+  for (const m of FAT_FIX_MEALS) {
+    const raw = saved?.[m.key];
+    const fallback = DEFAULT_FAT_FIXES[m.key];
+    const hasRaw = raw && typeof raw === "object";
+    const id = hasRaw && "id" in raw ? String(raw.id || "") : fallback.id;
+    const amount = hasRaw && "amount" in raw ? Number(raw.amount) || 0 : fallback.amount;
+    out[m.key] = { id, amount: Math.max(0, amount) };
+  }
+  return out;
+}
+
+// 固定脂肪项的展示文案（如「南瓜子 10克」），未设或已取消返回「无」
+function fatFixLabel(key, fixes) {
+  const f = (fixes || mealFatFixes())[key];
+  if (!f || !f.id || f.amount <= 0) return "无";
+  const food = findFood(f.id);
+  return food ? `${food.name} ${f.amount}${unitLabel(food.unit)}` : "无";
+}
+
+function isDefaultFatFixes(s) {
+  return FAT_FIX_MEALS.every((m) => {
+    const cur = s[m.key] || {};
+    const def = DEFAULT_FAT_FIXES[m.key];
+    return String(cur.id || "") === def.id && Number(cur.amount || 0) === def.amount;
+  });
+}
+
+// 烹调油：补足固定项与食材自带之外的脂肪，只出现在午餐 / 晚餐（早餐不炒菜）。
+const OIL_MEAL_NAMES = ["午餐", "晚餐"];
+function cookingOil() {
+  const direct = findFood("olive-oil");
+  if (direct) return direct;
+  return allFoods().find((f) => f && f.name && foodType(f) === "脂肪" && Number(f.carb) === 0 && Number(f.protein) === 0);
+}
+
 async function savePack() {
   if (state.mode !== "edit") { toast("只读模式，无法保存", true); return false; }
   if (state.saving) return false;
@@ -289,21 +441,6 @@ async function savePack() {
   }
 }
 
-function renderProfileHeader() {
-  const p = state.pack.profile || {};
-  const g = state.pack.goal;
-  const methodName = METHOD_NAMES[state.pack.method?.id] || "未选方法";
-  $("#profileTitle").textContent = `${p.gender === "male" ? "男" : "女"} · ${p.weight ?? "—"}kg · ${methodName}`;
-  $("#profileMeta").textContent = `起始 ${p.startDate ?? "—"} · 每周 ${p.exerciseHours ?? 0} 小时 / ${p.exerciseTimes ?? 0} 次`;
-  $("#goalKcal").textContent = g ? Math.round(g.kcal) : "—";
-  $("#profileNote").textContent = g
-    ? `每日目标：碳水 ${fmtNum(g.carb)}g · 蛋白 ${fmtNum(g.protein)}g · 脂肪 ${fmtNum(g.fat)}g`
-    : "record-only 模式，无目标";
-  $("#profileHeader").hidden = false;
-  $("#moduleNav").hidden = false;
-  renderPlanProgress();
-}
-
 // 计划总天数：lifestyle/recomposition 按 90 天；carb-cycle 按各阶段天数累加。
 function planDaysTotal() {
   const m = state.pack?.method;
@@ -329,24 +466,93 @@ function planCountdown() {
   return { total, dayNo, remaining, endLabel };
 }
 
-// 减脂进度：以起始体重 - 最近体重 除以 起始 - 目标。无 targetWeight 返回 null。
+// 当前体重：取「日期最大」的一条体重记录。没有记录时回落到档案起始体重，
+// 并用 isLogged 区分（避免把起始体重冒充成实测值）。
+function currentWeightInfo() {
+  const p = state.pack.profile || {};
+  const startWeight = p.weight ?? null;
+  const logs = state.pack.logs || {};
+  let latest = null, latestDate = null;
+  for (const [date, v] of Object.entries(logs)) {
+    const w = v?.weight;
+    if (w != null && Number.isFinite(Number(w)) && (latestDate === null || date > latestDate)) {
+      latestDate = date; latest = Number(w);
+    }
+  }
+  return {
+    startWeight,
+    value: latest != null ? latest : startWeight,
+    date: latestDate,
+    isLogged: latest != null,
+  };
+}
+
+// 减脂进度：以起始体重 - 当前体重 除以 起始 - 目标。无 targetWeight 返回 null。
 function fatlossProgress() {
   const p = state.pack.profile || {};
   const startWeight = p.weight;
   const target = p.targetWeight;
   if (startWeight == null || target == null || startWeight === target) return null;
-  const logs = state.pack.logs || {};
-  let latest = null, latestDate = null;
-  for (const [date, v] of Object.entries(logs)) {
-    if (v?.weight != null && (latestDate === null || date > latestDate)) {
-      latestDate = date; latest = Number(v.weight);
-    }
-  }
-  const currentWeight = latest != null ? latest : startWeight;
+  const currentWeight = currentWeightInfo().value;
   const lost = startWeight - currentWeight;
   const goal = startWeight - target;
   const pct = goal > 0 ? Math.max(0, Math.min(100, (lost / goal) * 100)) : 0;
   return { startWeight, currentWeight, target, lost, goal, pct };
+}
+
+// 档案头 hero：把「当前体重」做成主视觉（大字号 + 变化标签），
+// 而不是混在标题文字里（旧版标题展示的是档案起始体重，减重后不再等于当前体重）。
+function renderWeightHero() {
+  const nowNode = $("#weightNow");
+  if (!nowNode) return;
+  const info = currentWeightInfo();
+  const p = state.pack.profile || {};
+  const target = p.targetWeight;
+
+  nowNode.textContent = info.value == null ? "—" : fmtNum(info.value);
+  $("#weightLabel").innerHTML = info.isLogged
+    ? `当前体重<span>最近记录 ${esc(shortDate(info.date))}</span>`
+    : `当前体重<span>${info.value == null ? "尚未记录" : "暂无记录，显示起始体重"}</span>`;
+
+  const chips = [];
+  if (info.startWeight != null && info.value != null) {
+    const delta = round1(info.startWeight - info.value); // 正数 = 已减
+    const dir = delta > 0 ? "down" : delta < 0 ? "up" : "flat";
+    const arrow = delta > 0 ? "↓" : delta < 0 ? "↑" : "·";
+    chips.push(
+      dir === "flat"
+        ? `<span class="weight-chip flat">与起始持平</span>`
+        : `<span class="weight-chip ${dir}">${arrow} ${fmtNum(Math.abs(delta))} kg <em>较起始</em></span>`
+    );
+  }
+  if (target != null && info.value != null) {
+    const remain = round1(info.value - target);
+    chips.push(
+      remain > 0
+        ? `<span class="weight-chip goal">距目标 ${fmtNum(remain)} kg</span>`
+        : `<span class="weight-chip done">已达成目标 ✓</span>`
+    );
+  }
+  if (info.isLogged && info.startWeight != null) {
+    chips.push(`<span class="weight-chip muted">起始 ${fmtNum(info.startWeight)} kg</span>`);
+  }
+  $("#weightChips").innerHTML = chips.join("");
+}
+
+function renderProfileHeader() {
+  const p = state.pack.profile || {};
+  const g = state.pack.goal;
+  const methodName = METHOD_NAMES[state.pack.method?.id] || "未选方法";
+  $("#profileTitle").textContent = `${p.gender === "male" ? "男" : "女"} · ${methodName}`;
+  $("#profileMeta").textContent = `起始 ${p.startDate ?? "—"} · 每周 ${p.exerciseHours ?? 0} 小时 / ${p.exerciseTimes ?? 0} 次`;
+  $("#goalKcal").textContent = g ? Math.round(g.kcal) : "—";
+  $("#profileNote").textContent = g
+    ? `每日目标：碳水 ${fmtNum(g.carb)}g · 蛋白 ${fmtNum(g.protein)}g · 脂肪 ${fmtNum(g.fat)}g`
+    : "record-only 模式，无目标";
+  renderWeightHero();
+  $("#profileHeader").hidden = false;
+  $("#moduleNav").hidden = false;
+  renderPlanProgress();
 }
 
 // 在档案头部渲染「倒计时 + 减脂进度栏」。
@@ -469,11 +675,12 @@ function renderToday() {
       const num = Number(raw);
       entry[key] = Number.isFinite(num) ? num : raw;
     }
-    await savePack();
+    const ok = await savePack();
     committed = readDraft();
     submitBtn.classList.remove("is-dirty");
     submitBtn.textContent = "已提交 ✓";
     submitHint.textContent = "已写入今日记录";
+    if (ok) renderProfileHeader(); // 体重可能变了：立即刷新档案头 hero 与进度条
     toast("今日状态已提交");
     setTimeout(() => {
       if (!submitBtn.isConnected) return;
@@ -1203,6 +1410,16 @@ function reviewWindow(logs) {
   return entries.slice(-7);
 }
 
+// 最近一条「有体重记录」的日期与数值。
+// 引擎未就绪（记录不足 3 天）时，手动设定目标需要它来兜底写入 window 与阶段基准。
+function lastWeightEntry() {
+  const entries = Object.entries(state.pack.logs || {})
+    .filter(([, v]) => v && v.weight != null && Number.isFinite(Number(v.weight)))
+    .sort(([a], [b]) => a.localeCompare(b));
+  if (!entries.length) return null;
+  return { day: entries[entries.length - 1][0], weight: Number(entries[entries.length - 1][1].weight) };
+}
+
 // 复盘引擎主函数：只读取数据、给出建议，不写库。
 // 返回 { ready, ... }；ready=false 时 reason 说明还缺什么数据。
 function computeReview() {
@@ -1344,8 +1561,8 @@ async function applyReview(result) {
 
   if (result.nextGoal) Object.assign(goal, result.nextGoal);
   if (goal.reviewDay == null) goal.reviewDay = 5; // 周五
-  if (goal.stageBaselineWeight == null) goal.stageBaselineWeight = Number(p.weight) || result.metrics.wEnd;
-  if (result.stageReset) goal.stageBaselineWeight = result.metrics.wEnd; // 重算后基准归位
+  if (goal.stageBaselineWeight == null) goal.stageBaselineWeight = Number(p.weight) || result.metrics?.wEnd || null;
+  if (result.stageReset) goal.stageBaselineWeight = result.metrics?.wEnd; // 重算后基准归位
 
   const adjustLog = Array.isArray(goal.adjustLog) ? goal.adjustLog : (goal.adjustLog = []);
   adjustLog.push({
@@ -1355,6 +1572,11 @@ async function applyReview(result) {
     verdict: result.verdict,
     deltaCarb: result.deltaCarb,
     stageReset: !!result.stageReset,
+    manual: !!result.manual,
+    // 人工覆盖：本窗口引擎建议已生效后，用户又手动改了目标。
+    // 不计入 deltaCarb、不重置阶段基准，仅覆盖目标值。
+    override: !!result.override,
+    carbAfter: goal.carb ?? null,
   });
 
   const reviews = pack.reviews || (pack.reviews = []);
@@ -1364,6 +1586,8 @@ async function applyReview(result) {
     windowEnd: result.windowEnd,
     message: result.reason,
     nextGoal: result.nextGoal ? { ...result.nextGoal } : null,
+    manual: !!result.manual,
+    override: !!result.override,
     confirmed: true,
     confirmedAt: new Date().toISOString(),
   });
@@ -1377,6 +1601,7 @@ async function applyReview(result) {
     windowEnd: result.windowEnd,
     message: result.reason,
     deltaCarb: result.deltaCarb,
+    manual: !!result.manual,
   });
 
   const ok = await savePack();
@@ -1385,18 +1610,35 @@ async function applyReview(result) {
 }
 
 // ==========================================================================
-// 排餐器：把「复盘结论 + 目标宏量 + 食材库」交给云端大模型生成下一阶段餐单
-// 输出严格 JSON，校验通过后才允许落库；失败给出明确原因，不静默失败。
+// 本地排餐器：不调用任何大模型，用确定性算法把「下一阶段目标 + 主食口径 + 蛋白口径 + 食材库」
+// 直接解算成 7 天餐单。同一份输入永远得到同一份结果，任何设备（含手机端）都能秒出。
+// 思路：
+//   ① 三餐按配比分到各自的碳水 / 蛋白目标；
+//   ② 每餐的「主食」与「蛋白源」各自跟随 pack.staples / pack.proteins 的口径，按天轮换；
+//   ③ 脂肪不走候选池 —— 早餐南瓜子与晚餐混合坚果是每天固定的量（pack.fatFixes），
+//      其余脂肪一律由烹调油在午餐 / 晚餐补足；
+//   ④ 两遍解算：先量出食材自带的脂肪，再把缺口摊给午 / 晚的油，最后反解克数并取整。
+// 参数口径（配比 / 步进 / 蔬菜份量）集中在下面几个常量里，便于后续调整。
 // ==========================================================================
 
-const PLAN_SYSTEM_PROMPT = [
-  "你是减脂餐单生成器。只输出 JSON，不输出解释、前言或任何 JSON 之外的文字。",
-  "只能使用用户提供的食材库中的食材，ingredients[].name 必须与食材库名称完全一致。",
-  "蔬菜与蓝莓不计入碳蛋脂目标，但可以出现在餐单里。",
-  "每天三餐（早餐/午餐/晚餐），每餐 2-5 样食材，份量单位用 g / ml / 个。",
-  "每天碳蛋脂合计尽量接近目标，单项偏差控制在 ±10% 以内。",
-  "7 天中有且仅有 1 天的 reviewDay 为 true，就是给定的复盘日那一天。",
-].join("");
+// 三餐宏量配比（早 3 : 午 4 : 晚 3），与「白天多供能、晚间控碳水」的餐次口径一致。
+const MEAL_SPLIT = {
+  "早餐": { carb: 0.3, protein: 0.3, fat: 0.3 },
+  "午餐": { carb: 0.4, protein: 0.4, fat: 0.4 },
+  "晚餐": { carb: 0.3, protein: 0.3, fat: 0.3 },
+};
+const MEAL_TIMES = { "早餐": "08:00", "午餐": "12:30", "晚餐": "18:30" };
+const PLAN_MEAL_ORDER = ["早餐", "午餐", "晚餐"];
+// 克数步进：主食与肉类 5g、油脂 2g；按「个」计的食材（鸡蛋）取整步进为 1 个。
+// 半个鸡蛋、半个苹果在现实里都没法执行，所以按「个」的一律整数。
+const AMOUNT_STEP = { carb: 5, protein: 5, fat: 2 };
+const PIECE_STEP = 1;
+// 取整后的保留下限：主食 / 蛋白源不足 10g 视为碎片直接剔掉（避免「牛油果 8g」这类没意义的条目），
+// 但烹调油本来就按小份量用（一勺十几克），下限只取一个步进，否则「6g 油」会被误杀、当天脂肪直接塌掉。
+const MIN_AMOUNT = { carb: 10, protein: 10, fat: 2 };
+// 蔬菜与蓝莓不计碳蛋脂，份量固定
+const VEG_AMOUNT = 200;
+const BERRY_AMOUNT = 50;
 
 // 生成未来 7 天日期骨架（从今天起）交给模型照抄，避免模型自行推算日历出错。
 function planDateSkeleton() {
@@ -1412,48 +1654,113 @@ function planDateSkeleton() {
   return out;
 }
 
-function buildPlanningPrompt(review) {
-  const pack = state.pack || {};
-  const goal = review.nextGoal || pack.goal || {};
-  const foods = allFoods().filter((f) => f && f.name);
-  const selectedIds = new Set(pack.foodLibrary?.selected || []);
-  const preferred = foods.filter((f) => selectedIds.has(f.id));
-  const skeleton = planDateSkeleton();
-  // 复用食材库的基准量口径：per=100 → 每 100g / 100ml，per=1 → 每 个
-  const fmtFood = (f) =>
-    `- ${f.name}（${foodType(f)}）每${perLabel(f).slice(1)}：碳 ${f.carb}g 蛋 ${f.protein}g 脂 ${f.fat}g`;
+// 某餐某槽位的候选池。
+// staple 严格跟随「餐次主食安排」、protein 严格跟随「餐次蛋白安排」——两者都是硬口径，
+// 只在该餐候选为空（= 不限定）时才回落到全库同类食材。
+// 候选池会剔除「要吃到离谱份量才够」的食材 —— 比如牛奶蛋白密度只有 3.3g/100ml，
+// 得喝 800ml 才顶一餐蛋白，自带碳水还会把额度顶穿。
+// 但用户在「餐次蛋白安排」里明确选定的，一律放行，不受密度过滤影响。
+//
+// 脂肪不再走候选池：坚果 / 南瓜子改为每天固定的摄入量（见 mealFatFixes），
+// 其余脂肪一律由烹调油补足（见 generatePlanLocally 的第二遍解算）。
+function slotCandidates(kind, meal, target) {
+  const usable = allFoods().filter((f) => f && f.name && !isZeroMacro(f));
 
-  return [
-    `【目标】每日 碳水 ${goal.carb}g、蛋白 ${goal.protein}g、脂肪 ${goal.fat}g（约 ${goal.kcal} kcal）。`,
-    "",
-    "【优选食材】优先从这些常用食材里组合：",
-    preferred.length ? preferred.map(fmtFood).join("\n") : "（无，改用下方完整食材库）",
-    "",
-    "【完整食材库】如需替换，只能从以下食材中选择，名称必须完全一致：",
-    foods.map(fmtFood).join("\n"),
-    "",
-    "【日期骨架】严格按以下 7 天输出，date / weekday / reviewDay 原样照抄，不要改动：",
-    skeleton.map((s) => `day ${s.day} → ${s.date}（${s.weekday}）reviewDay=${s.reviewDay}`).join("\n"),
-    "",
-    "【餐次】每天固定三餐：早餐 08:00、午餐 12:30、晚餐 18:30。",
-    "",
-    "【输出格式】只输出下面这个结构的 JSON：",
-    '{"days":[{"day":1,"date":"YYYY-MM-DD","weekday":"X","reviewDay":false,"meals":[{"id":"m1","name":"早餐","time":"08:00","ingredients":[{"name":"燕麦片","amount":60,"unit":"g"}]}]}]}',
-  ].join("\n");
+  if (kind === "staple") {
+    const key = STAPLE_KEY_BY_MEAL[meal];
+    const pool = (mealStaples()[key] || []).map((id) => findFood(id)).filter(Boolean);
+    return pool.length ? pool : usable.filter((f) => foodType(f) === "主食");
+  }
+
+  if (kind === "protein") {
+    const key = PROTEIN_KEY_BY_MEAL[meal];
+    const configured = (mealProteins()[key] || []).map((id) => findFood(id)).filter(Boolean);
+    // 该餐未限定蛋白 → 回落到全库蛋白类（肉类蛋白 + 蛋奶 + 蛋白粉）
+    const source = configured.length ? configured : usable.filter((f) => foodType(f) === "蛋白质");
+    // 用户显式选定的餐次蛋白是意图明确的决定，只过密度闸门（份量别离谱），不做效率判断
+    const explicit = new Set(configured.map((f) => f.id));
+    const want = Math.max(1, Number(target?.protein) || 30);
+    const allows = (f) => {
+      if (explicit.has(f.id)) return true;
+      const density = Number(f.protein) / (f.per || 100);
+      if (density <= 0) return false;
+      // 按个计的（鸡蛋）最多 6 个；按克计的最多 350g
+      return want / density <= ((f.per || 100) === 1 ? 6 : 350);
+    };
+    const lean = source.filter(allows);
+    const usePool = lean.length ? lean : source;
+    // 低脂优先：脂肪/蛋白比小的排前面，7 天轮换时先排清淡的，口味与脂肪都更稳
+    const leanRatio = (f) => Number(f.fat) / Math.max(1, Number(f.protein));
+    // 该餐被取消限定（回落到全库）时，仍按餐次习惯分个组：早餐先蛋奶、正餐先肉类蛋白，
+    // 免得「不限定」变成「早餐瘦牛肉 100g」。
+    const head = configured.length ? null : meal === "早餐" ? ["蛋奶", "肉类蛋白", "其他"] : ["肉类蛋白", "蛋奶", "其他"];
+    const catRank = (f) => (head ? (head.indexOf(f.category) + 1 || 99) : 0);
+    return usePool.slice().sort((a, b) => catRank(a) - catRank(b) || leanRatio(a) - leanRatio(b));
+  }
+  return [];
 }
 
-// 从模型输出里稳健地取 JSON（容错 Markdown 围栏与前后多余文字）
-function parsePlanJson(text) {
-  let s = String(text || "").trim();
-  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fence) s = fence[1].trim();
-  const a = s.indexOf("{");
-  const b = s.lastIndexOf("}");
-  if (a >= 0 && b > a) s = s.slice(a, b + 1);
-  return JSON.parse(s);
+// 迭代求解每样食材的克数。
+// 不能用「一次性顺序反解」—— 食材是互相渗透的（奶带碳水、鸭腿带脂肪），
+// 一次性解会让后选的槽位把前面的额度顶穿。这里用带阻尼的迭代：
+// 先按各自主责（主食→碳水、蛋白源→蛋白、脂肪源→脂肪）给出初值，
+// 再按残差反复微调，直到三项都收敛；无解时（如脂肪目标已被肉占满）脂肪槽自然压到 0。
+// kinds 指定本次要盯住哪几项宏量：早餐没有可调脂肪源（只有鸡蛋自带 + 固定南瓜子），
+// 所以只盯碳水与蛋白，脂肪是自然产物，不该为了凑脂肪去扭曲鸡蛋的份数。
+function solveMealAmounts(target, picks, kinds = ["carb", "protein", "fat"]) {
+  const per = picks.map((p) => ({
+    carb: Number(p.food.carb) / (p.food.per || 100),
+    protein: Number(p.food.protein) / (p.food.per || 100),
+    fat: Number(p.food.fat) / (p.food.per || 100),
+  }));
+  const amt = picks.map((p, i) => {
+    if (p.fixed != null) return Math.max(0, Number(p.fixed) || 0); // 固定项：份量已定，不参与反解
+    const d = per[i][p.kind];
+    return d > 0 ? (Number(target[p.kind]) || 0) / d : 0;
+  });
+
+  for (let iter = 0; iter < 60; iter++) {
+    const got = { carb: 0, protein: 0, fat: 0 };
+    picks.forEach((p, i) => {
+      got.carb += per[i].carb * amt[i];
+      got.protein += per[i].protein * amt[i];
+      got.fat += per[i].fat * amt[i];
+    });
+    // 只统计被盯住的宏量；固定项与食材渗透都算在 got 里，所以不会被重复计入
+    let worst = 0;
+    for (const k of kinds) {
+      const t = Number(target[k]) || 0;
+      if (t <= 0) continue;
+      worst = Math.max(worst, Math.abs(t - got[k]) / t);
+    }
+    if (worst < 0.01) break;
+    picks.forEach((p, i) => {
+      if (p.fixed != null) return;
+      const d = per[i][p.kind];
+      const t = Number(target[p.kind]) || 0;
+      if (d > 0) amt[i] = Math.max(0, amt[i] + ((t - got[p.kind]) / d) * 0.8); // 0.8 阻尼，防高密度食材过冲
+    });
+  }
+
+  // 取整到人能执行的份量（主食/肉类 5g、油脂 2g、按「个」的整数个），再按各槽位的下限剔掉碎片。
+  // 固定项按原样输出，不取整、不清洗 —— 它就是要每天吃那么多。
+  return amt.map((value, i) => {
+    if (picks[i].fixed != null) return Math.max(0, Number(picks[i].fixed) || 0);
+    const byPiece = (picks[i].food.per || 100) === 1;
+    const step = byPiece ? PIECE_STEP : AMOUNT_STEP[picks[i].kind];
+    const floor = byPiece ? 1 : MIN_AMOUNT[picks[i].kind];
+    const rounded = Math.round(Math.max(0, Math.round(value / step) * step) * 10) / 10;
+    return rounded >= floor ? rounded : 0;
+  });
 }
 
-// 结构校验：天数、餐次名、食材字段、复盘日恰好 1 天
+// 轮换取候选：池子为空返回 null，否则按序号取模（保证 7 天内自然轮换、不整周重复）
+function pickAt(pool, index) {
+  if (!pool || !pool.length) return null;
+  return pool[((index % pool.length) + pool.length) % pool.length];
+}
+
+// 结构校验：天数、餐次名、食材字段、复盘日恰好 1 天（本地算法产出同样过这道关）
 function validateGeneratedPlan(plan) {
   if (!plan || !Array.isArray(plan.days) || !plan.days.length) throw new Error("模型没有返回 days 数组");
   let reviewDays = 0;
@@ -1476,15 +1783,107 @@ function validateGeneratedPlan(plan) {
   return plan;
 }
 
-// 调模型生成下一阶段餐单（onDelta 用于流式进度）
-async function generatePlanViaLlm(review, options = {}) {
-  const messages = [
-    { role: "system", content: PLAN_SYSTEM_PROMPT },
-    { role: "user", content: buildPlanningPrompt(review) },
-  ];
-  const res = await callLlm(messages, { onDelta: options.onDelta, temperature: 0.7, signal: options.signal });
-  const plan = validateGeneratedPlan(parsePlanJson(res.text));
-  return { plan, model: res.model };
+// 本地排餐主入口：产出与原来云端版本完全一致的结构（7 天 × 三餐 × 食材克数）。
+// 全程同步计算，不发起任何网络请求 —— 手机端也能瞬间出结果，不会超时或转圈。
+// seed 只改轮换起点：seed=0 是稳定基准；「换一种搭配」时递增即可得到另一套组合。
+function generatePlanLocally(review, seed = 0) {
+  const goal = review?.nextGoal || state.pack?.goal || {};
+  const goalNum = {
+    carb: Number(goal.carb) || 0,
+    protein: Number(goal.protein) || 0,
+    fat: Number(goal.fat) || 0,
+  };
+  const skeleton = planDateSkeleton();
+  const veg = findFood("vegetables");
+  const berry = findFood("blueberry");
+  const oil = cookingOil();
+  const fixes = mealFatFixes();
+
+  // 每个餐次、每个槽位各准备一份候选池（只算一次，7 天复用）。
+  // 候选池要按「该餐的宏量目标」来筛（份量会离谱的食材在这里被剔除），所以先算好每餐目标。
+  const pools = { staple: {}, protein: {} };
+  const mealTargets = {};
+  for (const meal of PLAN_MEAL_ORDER) {
+    const split = MEAL_SPLIT[meal];
+    const target = {
+      carb: goalNum.carb * split.carb,
+      protein: goalNum.protein * split.protein,
+      fat: goalNum.fat * split.fat,
+    };
+    mealTargets[meal] = target;
+    pools.staple[meal] = slotCandidates("staple", meal, target);
+    pools.protein[meal] = slotCandidates("protein", meal, target);
+  }
+
+  // 每天固定的脂肪项（南瓜子 / 混合坚果）：份量恒定、不轮换，所以作为 fixed 项直接压进那一餐。
+  const fixPickFor = (meal) => {
+    const key = FAT_FIX_KEY_BY_MEAL[meal];
+    const f = key ? fixes[key] : null;
+    if (!f || !f.id || f.amount <= 0) return null;
+    const food = findFood(f.id);
+    return food ? { kind: "fat", food, fixed: f.amount } : null;
+  };
+
+  const dryFatOf = (picks, amounts) =>
+    picks.reduce((sum, p, i) => sum + (Number(p.food.fat) / (p.food.per || 100)) * amounts[i], 0);
+
+  const days = skeleton.map((s, di) => {
+    // —— 第一天：搭好三餐骨架 ——
+    // 同一天的三个餐次错开取模，避免早午晚撞到同一样食材；主食与蛋白各跟随自己的餐次口径。
+    const built = PLAN_MEAL_ORDER.map((name, mi) => {
+      const picks = [];
+      const staple = pickAt(pools.staple[name], di + seed);
+      const protein = pickAt(pools.protein[name], di + mi + seed);
+      if (staple) picks.push({ kind: "carb", food: staple });
+      if (protein) picks.push({ kind: "protein", food: protein });
+      const fix = fixPickFor(name);
+      if (fix) picks.push(fix);
+      return { name, mi, picks, dryFat: 0 };
+    });
+
+    // —— 第一遍解算：先只盯碳水与蛋白，看食材自带多少脂肪 ——
+    // 脂肪不设目标，因为它此刻还没有可调的来源；这一遍只用来量出「自带脂肪」的盘子。
+    if (oil) {
+      let dayFat = 0;
+      for (const b of built) {
+        const amounts = solveMealAmounts(mealTargets[b.name], b.picks, ["carb", "protein"]);
+        b.dryFat = dryFatOf(b.picks, amounts);
+        dayFat += b.dryFat;
+      }
+      // —— 分配烹调油 ——
+      // 缺口 = 每日脂肪目标 − 固定项与食材自带；按午 4 : 晚 3 摊到两个正餐，早餐不吃油。
+      const remFat = goalNum.fat - dayFat;
+      const weightSum = OIL_MEAL_NAMES.reduce((a, n) => a + (MEAL_SPLIT[n].fat || 0), 0);
+      for (const b of built) {
+        if (!OIL_MEAL_NAMES.includes(b.name)) continue;
+        const share = remFat > 0 ? (remFat * (MEAL_SPLIT[b.name].fat || 0)) / weightSum : 0;
+        b.oilShare = share;
+        if (share > 0) b.picks.push({ kind: "fat", food: oil });
+      }
+    }
+
+    // —— 第二遍解算：把油放进来，盯住三项宏量 ——
+    const meals = built.map((b) => {
+      const hasAdjustableFat = b.picks.some((p) => p.kind === "fat" && p.fixed == null);
+      // 只有存在可调脂肪源时才把脂肪纳入目标；否则（早餐 / 无油）硬凑脂肪只会扭曲主食与蛋白。
+      const kinds = hasAdjustableFat ? ["carb", "protein", "fat"] : ["carb", "protein"];
+      const target = { ...mealTargets[b.name] };
+      if (hasAdjustableFat) target.fat = b.dryFat + (b.oilShare || 0);
+      const amounts = solveMealAmounts(target, b.picks, kinds);
+      const ingredients = b.picks
+        .map((p, i) => ({ name: p.food.name, amount: amounts[i], unit: p.food.unit || "g" }))
+        .filter((it) => it.amount > 0);
+
+      // 蔬菜午晚各一份、蓝莓配早餐。两者都不计碳蛋脂，所以放在解算之后追加，不干扰配额。
+      if (veg && b.name !== "早餐") ingredients.push({ name: veg.name, amount: VEG_AMOUNT, unit: "g" });
+      if (berry && b.name === "早餐") ingredients.push({ name: berry.name, amount: BERRY_AMOUNT, unit: "g" });
+
+      return { id: `m${b.mi + 1}`, name: b.name, time: MEAL_TIMES[b.name], ingredients };
+    });
+    return { day: s.day, date: s.date, weekday: s.weekday, reviewDay: s.reviewDay, meals };
+  });
+
+  return { plan: validateGeneratedPlan({ days }) };
 }
 
 // 落库：旧周归档进 history.weeks，再写入新 weeklyPlan
@@ -1509,7 +1908,7 @@ async function applyGeneratedPlan(plan, review) {
     confirmed: true,
     weekIndex,
     startDate: plan.days[0].date,
-    generatedBy: "cloud-llm",
+    generatedBy: "local-solver",
     generatedAt: new Date().toISOString(),
     goal,
     days: plan.days,
@@ -1527,9 +1926,11 @@ function renderReview() {
 
   const p = state.pack.profile || {};
   const g = state.pack.goal;
-  const startDate = p.startDate || "2026-09-22";
+  // 兜底起始日：档案正常时 p.startDate 必有值，这里只防数据缺失。
+  // 用中性日期而非实例日期，避免模板副本带上真实实例信息（模板卫生检查会拦）。
+  const startDate = p.startDate || "2026-01-01";
   const period = 90;
-  const target = Number(p.targetWeight) || 55;
+  const target = Number(p.targetWeight) || 70;
 
   const logs = state.pack.logs || {};
   const weightEntries = Object.entries(logs).filter(([, v]) => v?.weight != null).sort(([a], [b]) => a.localeCompare(b));
@@ -1631,11 +2032,17 @@ function reviewAdvisorCard() {
   const paint = () => {
     body.innerHTML = "";
     const r = computeReview();
-    if (!r.ready) {
+    const cur = state.pack.goal || null;
+    const engineReady = !!r.ready;
+    const engineApplied = !!r.alreadyAdjusted;
+
+    // 引擎未就绪（记录不足 3 天等）时：只要已有目标，仍允许手动设定碳蛋脂，
+    // 只是没有引擎判定依据。完全没有目标才只给提示——那种情况该先由方案生成系数。
+    if (!engineReady && !cur) {
       body.appendChild(el(`<p class="empty">${esc(r.reason)}</p>`));
       return;
     }
-    const m = r.metrics;
+    const m = r.metrics || {};
     const verdictMap = {
       fast: ["下降过快", "alert"], hungry: ["饥饿偏高", "alert"],
       "mild-hungry": ["轻微饥饿", "warn"], fatigued: ["训练乏力", "warn"],
@@ -1652,21 +2059,8 @@ function reviewAdvisorCard() {
       [fmtNum(m.stageDropPct) + "%", "阶段累计降幅"],
     ].map(([v, k]) => `<div class="am-cell"><b>${v}</b><span>${k}</span></div>`).join("");
 
-    const next = r.nextGoal;
-    const rows = [
-      ["碳水", r.prevGoal.carb, next ? next.carb : null, "g"],
-      ["蛋白", r.prevGoal.protein, next ? next.protein : null, "g"],
-      ["脂肪", r.prevGoal.fat, next ? next.fat : null, "g"],
-      ["热量", r.prevGoal.kcal, next ? next.kcal : null, ""],
-    ].map(([label, a, b, unit]) => {
-      const to = b == null ? a : b;
-      const diff = round1(to - a);
-      const cls = diff > 0 ? "up" : diff < 0 ? "down" : "flat";
-      const sign = diff > 0 ? "+" : "";
-      return `<div class="gc-row"><span>${label}</span><span>${fmtNum(a)}</span><span>${fmtNum(to)}</span><span class="gc-diff ${cls}">${diff === 0 ? "—" : sign + fmtNum(diff) + unit}</span></div>`;
-    }).join("");
-
-    body.appendChild(el(`
+    body.appendChild(el(engineReady
+      ? `
       <div class="advisor-inner">
         <div class="advisor-head">
           <span class="advisor-verdict ${vCls}">${vLabel}</span>
@@ -1674,12 +2068,170 @@ function reviewAdvisorCard() {
         </div>
         <div class="advisor-reason">${esc(r.reason)}</div>
         <div class="advisor-metrics">${metrics}</div>
-        <div class="goal-compare">
-          <div class="gc-row gc-head"><span>营养素</span><span>当前</span><span>建议</span><span>变化</span></div>
-          ${rows}
+      </div>`
+      : `
+      <div class="advisor-inner">
+        <div class="advisor-head">
+          <span class="advisor-verdict warn">引擎暂不可判定</span>
+          <span class="advisor-window">手动设定模式</span>
         </div>
+        <div class="advisor-reason">${esc(r.reason)}你仍可以在下方直接设定下一阶段的碳蛋脂目标。</div>
       </div>`));
 
+    // —— 下一阶段目标：以引擎建议为初值，允许手动微调 ——
+    // 初值口径：本窗口已生效 → 以「当前目标」为参照（引擎新建议本窗口不再生效）；
+    // 引擎未就绪 → 也以「当前目标」为初值，走纯手动设定路径。
+    const next = engineReady ? r.nextGoal : null;
+    const base = engineReady && !engineApplied ? (r.nextGoal || r.prevGoal) : cur;
+    const start = {
+      carb: Number(base.carb) || 0,
+      protein: Number(base.protein) || 0,
+      fat: Number(base.fat) || 0,
+    };
+    const draft = { ...start };
+    let manual = false;
+    let refreshActions = null;
+    const FIELDS = [["carb", "碳水"], ["protein", "蛋白"], ["fat", "脂肪"]];
+    const kcalOf = (d) => Math.round(d.carb * 4 + d.protein * 4 + d.fat * 9);
+
+    const editor = el(`
+      <div class="goal-editor">
+        <div class="ge-title">
+          <b>下一阶段目标</b>
+          <span class="ge-badge" hidden>已手动微调</span>
+          <button class="text-button ge-reset" type="button" hidden>恢复建议值</button>
+        </div>
+        <div class="ge-rows"></div>
+        <div class="ge-kcal"><span>合计热量</span><b class="ge-kcal-val">—</b><span>kcal</span></div>
+        <p class="ge-note">数字可直接改：碳水 / 蛋白 1g ≈ 4 kcal，脂肪 1g ≈ 9 kcal。${engineReady ? "改动会标记为「手动微调」写入复盘记录；同一窗口只生效一次。" : "引擎暂无法判定，本次改动会以「手动设定」写入复盘记录。"}</p>
+      </div>`);
+    const rowsBox = editor.querySelector(".ge-rows");
+    const kcalVal = editor.querySelector(".ge-kcal-val");
+    const badge = editor.querySelector(".ge-badge");
+    const resetBtn = editor.querySelector(".ge-reset");
+    const inputs = {};
+    const diffs = {};
+
+    for (const [k, label] of FIELDS) {
+      const row = el(`
+        <div class="ge-row">
+          <span class="ge-name">${label}</span>
+          <span class="ge-from">${fmtNum(start[k])}</span>
+          <span class="ge-arrow">→</span>
+          <input class="ge-input" type="number" step="0.1" min="0" inputmode="decimal" aria-label="${label}目标">
+          <span class="ge-unit">g</span>
+          <span class="ge-diff">—</span>
+        </div>`);
+      const input = row.querySelector(".ge-input");
+      input.value = String(start[k]);
+      inputs[k] = input;
+      diffs[k] = row.querySelector(".ge-diff");
+      input.addEventListener("input", () => {
+        const v = Number(input.value);
+        draft[k] = Number.isFinite(v) && v >= 0 ? round1(v) : 0;
+        syncEditor();
+      });
+      rowsBox.appendChild(row);
+    }
+
+    const syncEditor = () => {
+      manual = FIELDS.some(([k]) => round1(draft[k]) !== round1(start[k]));
+      kcalVal.textContent = String(kcalOf(draft));
+      badge.hidden = !manual;
+      resetBtn.hidden = !manual;
+      for (const [k] of FIELDS) {
+        const d = round1(draft[k] - start[k]);
+        const cls = d > 0 ? "up" : d < 0 ? "down" : "flat";
+        diffs[k].className = `ge-diff gc-diff ${cls}`;
+        diffs[k].textContent = d === 0 ? "—" : (d > 0 ? "+" : "") + fmtNum(d) + "g";
+      }
+      if (refreshActions) refreshActions();
+    };
+    resetBtn.addEventListener("click", () => {
+      for (const [k] of FIELDS) { draft[k] = start[k]; inputs[k].value = String(start[k]); }
+      syncEditor();
+    });
+    syncEditor();
+    body.appendChild(editor);
+
+    // 食材口径分三块（主食 / 蛋白 / 固定脂肪），不再有独立的「优先食材」——
+    // 三块口径本身已经决定了每餐吃什么，多一层「优先」只会互相打架。
+
+    // —— 餐次主食安排（写入 pack.staples，排餐时按餐次分配主食）——
+    const stapleBox = el(`
+      <div class="food-pref staple-pref">
+        <div class="fp-head">
+          <b>餐次主食安排</b>
+          <button class="text-button staple-edit" type="button">调整</button>
+        </div>
+        <div class="staple-lines"></div>
+        <p class="fp-note">按谭师口径：燕麦只在早餐、午餐大米、晚餐薯类轮换；晚间用高纤薯类压食欲。默认即以该口径排餐。</p>
+      </div>`);
+    const paintStaples = () => {
+      const box = stapleBox.querySelector(".staple-lines");
+      box.innerHTML = "";
+      const s = mealStaples();
+      for (const m of STAPLE_MEALS) {
+        const names = stapleNames(m.key, s);
+        box.appendChild(el(`<div class="staple-line"><span class="staple-meal">${m.name}</span><span class="staple-names">${names.length ? esc(names.join(" / ")) : "不限定"}</span></div>`));
+      }
+    };
+    stapleBox.querySelector(".staple-edit").addEventListener("click", () => {
+      openStaplePicker(() => render());
+    });
+    paintStaples();
+    body.appendChild(stapleBox);
+
+    // —— 餐次蛋白安排（写入 pack.proteins，排餐时按餐次分配蛋白来源）——
+    const proteinBox = el(`
+      <div class="food-pref staple-pref">
+        <div class="fp-head">
+          <b>餐次蛋白安排</b>
+          <button class="text-button protein-edit" type="button">调整</button>
+        </div>
+        <div class="staple-lines"></div>
+        <p class="fp-note">按谭师口径：早餐全蛋、午餐白肉或虾仁、晚餐瘦牛肉。按餐次限定蛋白来源，避免轮换出「午餐 7 个鸡蛋」这类组合。</p>
+      </div>`);
+    const paintProteins = () => {
+      const box = proteinBox.querySelector(".staple-lines");
+      box.innerHTML = "";
+      const s = mealProteins();
+      for (const m of PROTEIN_MEALS) {
+        const names = proteinNames(m.key, s);
+        box.appendChild(el(`<div class="staple-line"><span class="staple-meal">${m.name}</span><span class="staple-names">${names.length ? esc(names.join(" / ")) : "不限定"}</span></div>`));
+      }
+    };
+    proteinBox.querySelector(".protein-edit").addEventListener("click", () => {
+      openProteinPicker(() => render());
+    });
+    paintProteins();
+    body.appendChild(proteinBox);
+
+    // —— 每日固定脂肪（写入 pack.fatFixes，其余脂肪由烹调油在午 / 晚补足）——
+    const fatFixBox = el(`
+      <div class="food-pref staple-pref">
+        <div class="fp-head">
+          <b>每日固定脂肪</b>
+          <button class="text-button fatfix-edit" type="button">调整</button>
+        </div>
+        <div class="staple-lines"></div>
+        <p class="fp-note">南瓜子与混合坚果按谭师口径每天固定吃，不作为可调脂肪源；其余脂肪由烹调油在午餐 / 晚餐补足。</p>
+      </div>`);
+    const paintFatFixes = () => {
+      const box = fatFixBox.querySelector(".staple-lines");
+      box.innerHTML = "";
+      const f = mealFatFixes();
+      for (const m of FAT_FIX_MEALS) {
+        box.appendChild(el(`<div class="staple-line"><span class="staple-meal">${m.name}</span><span class="staple-names">${esc(fatFixLabel(m.key, f))}</span></div>`));
+      }
+    };
+    fatFixBox.querySelector(".fatfix-edit").addEventListener("click", () => {
+      openFatFixPicker(() => render());
+    });
+    paintFatFixes();
+    body.appendChild(fatFixBox);
+
+    // —— 确认 ——
     const actions = el(`
       <div class="advisor-actions">
         <span class="advisor-note"></span>
@@ -1688,21 +2240,67 @@ function reviewAdvisorCard() {
     const note = actions.querySelector(".advisor-note");
     const btn = actions.querySelector(".advisor-apply");
 
-    if (r.alreadyAdjusted) {
-      note.textContent = "本窗口已应用过调整，不会重复叠加。";
-      btn.textContent = "本窗口已生效";
+    refreshActions = () => {
+      // ① 引擎未就绪：只能手动设定，且必须真的改动过数字才允许写入。
+      if (!engineReady) {
+        note.textContent = manual
+          ? "确认后按你的数字写入目标（本次为手动设定，无引擎判定依据）。"
+          : "引擎暂无法判定；改动上面的数字即可手动设定目标。";
+        btn.textContent = manual ? "写入手动目标" : "暂无改动";
+        btn.disabled = !manual;
+        return;
+      }
+      // ② 本窗口引擎建议已生效：默认置灰防误触，一旦手动改数即允许人工覆盖。
+      if (engineApplied) {
+        note.textContent = manual
+          ? "本窗口的引擎建议已生效；这次是人工覆盖目标，不会重复叠加碳水。"
+          : "本窗口已应用过调整，不会重复叠加。改动上面的数字可人工覆盖目标。";
+        btn.textContent = manual ? "按我的数字覆盖目标" : "本窗口已生效";
+        btn.disabled = !manual;
+        return;
+      }
+      // ③ 正常路径：引擎判定 → 可采用或手动微调
+      note.textContent = manual
+        ? "已手动微调，确认后按你的数字写入。"
+        : next ? "确认后写入目标，并把本周记录归档。" : "本次判定无需调整目标，确认后仅记录复盘。";
+      btn.textContent = manual ? "确认并生效（手动）" : next ? "确认并生效" : "确认复盘记录";
+      btn.disabled = false;
+    };
+    refreshActions();
+
+    btn.addEventListener("click", async () => {
       btn.disabled = true;
-    } else {
-      note.textContent = next ? "确认后写入目标，并把本周记录归档。" : "本次判定无需调整目标，确认后仅记录复盘。";
-      btn.textContent = next ? "确认并生效" : "确认复盘记录";
-      btn.addEventListener("click", async () => {
-        btn.disabled = true;
-        btn.textContent = "应用中…";
-        const ok = await applyReview(r);
-        if (ok) render();
-        else { btn.disabled = false; btn.textContent = "确认并生效"; }
-      });
-    }
+      btn.textContent = "应用中…";
+      const goal = { carb: draft.carb, protein: draft.protein, fat: draft.fat, kcal: kcalOf(draft) };
+      const nums = `碳水 ${fmtNum(goal.carb)}g / 蛋白 ${fmtNum(goal.protein)}g / 脂肪 ${fmtNum(goal.fat)}g`;
+      let payload;
+      if (!engineReady) {
+        const last = lastWeightEntry();
+        const day = (last && last.day) || todayDateString();
+        payload = {
+          ready: true, methodId: "", isRecomp: false, override: false,
+          windowStart: day, windowEnd: day, spanDays: 1, sampleDays: 0, loggedDays: 0,
+          metrics: { wEnd: last ? last.weight : null, weeklyDropPct: 0, stageDropPct: 0, hunger4plus: 0, feelDown: 0 },
+          verdict: "manual",
+          reason: `手动设定目标（引擎暂无法判定：${r.reason}）目标定为 ${nums}。`,
+          deltaCarb: 0, stageReset: false, manual: true,
+          nextGoal: goal, prevGoal: cur,
+        };
+      } else {
+        payload = { ...r, manual, nextGoal: (manual || next) ? goal : null };
+        if (engineApplied) {
+          payload.override = true;
+          payload.deltaCarb = 0;
+          payload.stageReset = false; // 人工覆盖不重置阶段基准
+          if (manual) payload.reason = `${r.reason} 本窗口的引擎建议已生效，随后人工覆盖为 ${nums}。`;
+        } else if (manual) {
+          payload.reason = `${r.reason} 你对本周数据做了手动微调，目标定为 ${nums}。`;
+        }
+      }
+      const ok = await applyReview(payload);
+      if (ok) render();
+      else { btn.disabled = false; refreshActions(); }
+    });
     body.appendChild(actions);
   };
 
@@ -1715,22 +2313,26 @@ function planStudioCard() {
   const card = el(`
     <section class="card">
       <h2><i>${icon("calendar")}</i>下一阶段餐单</h2>
-      <p class="hint-text" style="margin:0 0 12px">按目标宏量，用云端大模型从你的食材库排 7 天餐单；生成后可预览，点「应用到本周计划」才写入。</p>
+      <p class="hint-text" style="margin:0 0 12px">按「本周复盘」卡设定的目标、主食 / 蛋白口径与固定脂肪，本地算法直接反解出 7 天餐单 —— 不联网、不调大模型，任何设备点一下即出；生成后可预览，点「应用到本周计划」才写入。</p>
       <div class="studio-body"></div>
     </section>`);
   const body = card.querySelector(".studio-body");
   let pending = null;
+  // 轮换起点：0 为稳定基准，「换一种搭配」时 +1 得到另一套食材组合
+  let seed = 0;
 
   const renderIdle = () => {
     pending = null;
     const r = computeReview();
     const g = (r.ready && r.nextGoal) || state.pack.goal || {};
     body.innerHTML = "";
+    // 目标 / 主食安排 / 蛋白安排 / 固定脂肪统一由「本周复盘」卡设定，本卡只负责生成。
+    // 这里不再重复展示与重复提供入口，避免两处“调整”按钮导致口径分叉。
     body.appendChild(el(`
       <div class="studio-idle">
-        <div class="studio-goal">将按 碳水 ${fmtNum(g.carb)}g · 蛋白 ${fmtNum(g.protein)}g · 脂肪 ${fmtNum(g.fat)}g 排餐</div>
+        <div class="studio-goal">按「本周复盘」卡设定的目标与食材口径排餐：碳水 ${fmtNum(g.carb)}g · 蛋白 ${fmtNum(g.protein)}g · 脂肪 ${fmtNum(g.fat)}g</div>
         <div class="studio-row">
-          <span class="studio-note">${r.ready ? "生成约需 20–60 秒" : esc(r.reason)}</span>
+          <span class="studio-note">${r.ready ? "本地计算 · 点一下即时完成" : esc(r.reason)}</span>
           <button class="text-button primary-action studio-run" type="button"${r.ready ? "" : " disabled"}>生成下一阶段餐单</button>
         </div>
       </div>`));
@@ -1738,35 +2340,19 @@ function planStudioCard() {
     if (runBtn && r.ready) runBtn.addEventListener("click", () => run());
   };
 
-  const run = async () => {
+  const run = (nextSeed) => {
     const r = computeReview();
     if (!r.ready) { toast(r.reason, true); return; }
-    body.innerHTML = "";
-    const box = el(`
-      <div class="studio-running">
-        <div class="studio-bar"><div class="studio-bar-fill"></div></div>
-        <div class="studio-run-text">正在生成餐单…</div>
-        <div class="studio-run-meta">已接收 <b class="studio-chars">0</b> 字</div>
-      </div>`);
-    body.appendChild(box);
-    const chars = box.querySelector(".studio-chars");
-    let n = 0;
+    if (Number.isFinite(nextSeed)) seed = nextSeed;
     try {
-      const { plan, model } = await generatePlanViaLlm(r, {
-        onDelta: (d) => { n += d.length; chars.textContent = String(n); },
-      });
-      pending = { plan, review: r, model };
+      const { plan } = generatePlanLocally(r, seed);
+      pending = { plan, review: r };
       renderPreview();
     } catch (error) {
-      const code = error?.code || "";
-      const hint = code === "no_cloud" ? "当前为本地模式，云端大模型不可用。"
-        : code === "no_llm" ? "宿主未接入大模型通道。"
-        : code === "no_model" ? "云端暂无可用模型，请稍后再试。"
-        : (error?.message || "生成失败");
       body.innerHTML = "";
       body.appendChild(el(`
         <div class="studio-error">
-          <p>生成失败：${esc(hint)}</p>
+          <p>生成失败：${esc(error?.message || "排餐算法未能完成")}</p>
           <button class="text-button studio-retry" type="button">重试</button>
         </div>`));
       body.querySelector(".studio-retry").addEventListener("click", () => run());
@@ -1774,7 +2360,7 @@ function planStudioCard() {
   };
 
   const renderPreview = () => {
-    const { plan, review, model } = pending;
+    const { plan, review } = pending;
     const goal = review.nextGoal || state.pack.goal || {};
     const within = (v, t) => (t ? Math.abs(v - t) / t <= 0.12 : true);
     const days = plan.days.map((d) => {
@@ -1782,6 +2368,10 @@ function planStudioCard() {
       const meals = d.meals
         .map((mm) => `<div class="sp-meal"><b>${esc(mm.name)}</b>${mm.ingredients.map((i) => `${esc(i.name)} ${i.amount}${esc(i.unit)}`).join(" · ")}</div>`)
         .join("");
+      const issues = planIssues(d);
+      const issueHtml = issues.length
+        ? `<div class="sp-staple-warn">偏离设定：${esc(issues.join("；"))}</div>`
+        : "";
       return `
         <div class="sp-day">
           <div class="sp-day-head"><b>D${d.day}</b><span>${d.date.slice(5)} ${esc(d.weekday)}</span>${d.reviewDay ? '<span class="review-tag">复盘日</span>' : ""}</div>
@@ -1792,19 +2382,20 @@ function planStudioCard() {
             <span class="${within(sum.fat, goal.fat) ? "ok" : "off"}">脂 ${fmtNum(sum.fat)}g</span>
             <span class="sp-kcal">${sum.kcal} kcal</span>
           </div>
+          ${issueHtml}
         </div>`;
     }).join("");
     body.innerHTML = "";
     body.appendChild(el(`
       <div class="studio-preview">
-        <div class="studio-preview-head">已生成 ${plan.days.length} 天 · ${esc(model || "云端模型")} · 绿色表示落在目标 ±12% 内</div>
+        <div class="studio-preview-head">本地计算 · 共 ${plan.days.length} 天 · 绿色表示落在目标 ±12% 内</div>
         <div class="sp-list">${days}</div>
         <div class="studio-actions">
-          <button class="text-button studio-redo" type="button">重新生成</button>
+          <button class="text-button studio-redo" type="button">换一种搭配</button>
           <button class="text-button primary-action studio-apply" type="button">应用到本周计划</button>
         </div>
       </div>`));
-    body.querySelector(".studio-redo").addEventListener("click", () => run());
+    body.querySelector(".studio-redo").addEventListener("click", () => run(seed + 1));
     body.querySelector(".studio-apply").addEventListener("click", async (e) => {
       const btn = e.currentTarget;
       btn.disabled = true;
@@ -1837,6 +2428,59 @@ function planDayMacros(day) {
   sum.fat = round1(sum.fat);
   sum.kcal = Math.round(sum.carb * 4 + sum.protein * 4 + sum.fat * 9);
   return sum;
+}
+
+// 餐单合规检查（预览时的非阻断提示），三类：
+//   ① 主食是否落在「餐次主食安排」的候选里；
+//   ② 蛋白来源是否落在「餐次蛋白安排」的候选里；
+//   ③ 该餐应有的每日固定脂肪（南瓜子 / 混合坚果）是否到位。
+// 某餐候选为空 = 不限定，跳过；加餐不在餐次口径内，不检查。
+function planIssues(day) {
+  const staples = mealStaples();
+  const proteins = mealProteins();
+  const fixes = mealFatFixes();
+  const issues = [];
+  const findIn = (meal, type) =>
+    (meal.ingredients || []).map((i) => findFood(i?.name)).filter((f) => f && foodType(f) === type);
+
+  for (const meal of day?.meals || []) {
+    const sk = STAPLE_KEY_BY_MEAL[meal?.name];
+    if (sk) {
+      const allowed = staples[sk] || [];
+      const inMeal = findIn(meal, "主食");
+      if (allowed.length) {
+        if (!inMeal.length) issues.push(`${meal.name}未安排主食`);
+        else if (!inMeal.some((f) => allowed.includes(f.id)))
+          issues.push(`${meal.name}主食「${inMeal.map((f) => f.name).join("、")}」不在设定候选`);
+      }
+    }
+
+    const pk = PROTEIN_KEY_BY_MEAL[meal?.name];
+    if (pk) {
+      const allowed = proteins[pk] || [];
+      const inMeal = findIn(meal, "蛋白质");
+      if (allowed.length) {
+        if (!inMeal.length) issues.push(`${meal.name}未安排蛋白来源`);
+        else if (!inMeal.some((f) => allowed.includes(f.id)))
+          issues.push(`${meal.name}蛋白「${inMeal.map((f) => f.name).join("、")}」不在设定候选`);
+      }
+    }
+
+    const fk = FAT_FIX_KEY_BY_MEAL[meal?.name];
+    if (fk) {
+      const fix = fixes[fk];
+      if (fix?.id && fix.amount > 0) {
+        const food = findFood(fix.id);
+        const hit = (meal.ingredients || []).some(
+          (i) => findFood(i?.name)?.id === fix.id && Number(i.amount) >= fix.amount - 0.01
+        );
+        if (!hit) {
+          issues.push(`${meal.name}缺少固定脂肪${food ? `（${food.name} ${fix.amount}${unitLabel(food.unit)}）` : ""}`);
+        }
+      }
+    }
+  }
+  return issues;
 }
 
 // —— 体重趋势：折线 + 渐变面积 + 复盘日金点 ——
@@ -1951,13 +2595,18 @@ function renderMine() {
   view.innerHTML = "";
   const p = state.pack.profile || {};
   const s = state.pack.screening || {};
+  const weightInfo = currentWeightInfo();
 
   const profileCard = el(`
     <section class="card">
       <h2><i>${icon("user")}</i>档案</h2>
       <ul class="profile-list">
         <li><span>性别</span><span>${p.gender === "male" ? "男" : "女"}</span></li>
-        <li><span>体重</span><span>${p.weight ?? "—"} kg</span></li>
+        <li><span>起始体重</span><span>${p.weight ?? "—"} kg</span></li>
+        <li><span>当前体重</span><span>${
+          weightInfo.value == null ? "—"
+            : `${fmtNum(weightInfo.value)} kg${weightInfo.isLogged ? `（${shortDate(weightInfo.date)}）` : "（起始值）"}`
+        }</span></li>
         <li><span>每周运动</span><span>${p.exerciseHours ?? 0} 小时 / ${p.exerciseTimes ?? 0} 次</span></li>
         <li><span>起始日</span><span>${p.startDate ?? "—"}</span></li>
         <li><span>方法</span><span>${METHOD_NAMES[state.pack.method?.id] || "未选"}</span></li>
@@ -2361,6 +3010,241 @@ function openCustomFoodLibrary() {
   }
 
   renderList();
+  dlg.showModal();
+}
+
+// 「按餐次多选」选择器（主食 / 蛋白共用一套交互）：
+// 为早/午/晚各挑若干候选，保存即持久化，排餐时由对应的 meal*() 读取。
+// cfg = { kicker, title, hint, pool, meals, defaultMap, currentMap, resetLabel, appliedMsg, clearedMsg, onSave }
+function openMealMultiPicker(cfg, onSaved) {
+  const dlg = document.createElement("dialog");
+  dlg.className = "food-picker staple-picker";
+  dlg.innerHTML = `
+    <div class="dialog-head">
+      <div><span class="section-kicker">${esc(cfg.kicker)}</span><h2>${esc(cfg.title)}</h2></div>
+      <button class="icon-button" type="button" aria-label="关闭">×</button>
+    </div>
+    <div class="staple-body">
+      <p class="hint-text">${esc(cfg.hint)}</p>
+      <div class="staple-sections"></div>
+    </div>
+    <div class="dialog-footer">
+      <button class="text-button staple-reset" type="button">${esc(cfg.resetLabel)}</button>
+      <button class="text-button primary-action staple-save" type="button">保存</button>
+    </div>`;
+  document.body.appendChild(dlg);
+
+  const pool = cfg.pool;
+  if (!pool.length) {
+    dlg.querySelector(".staple-sections").appendChild(el(`<p class="empty">食材库里没有「${esc(cfg.emptyType)}」类食材。</p>`));
+  }
+  const draft = {};
+  for (const m of cfg.meals) draft[m.key] = new Set(cfg.currentMap[m.key] || []);
+  const sections = dlg.querySelector(".staple-sections");
+
+  const paint = () => {
+    sections.innerHTML = "";
+    for (const m of cfg.meals) {
+      const box = el(`
+        <div class="staple-section">
+          <div class="staple-sec-head"><b>${m.name}</b><span class="staple-sec-count"></span></div>
+          <div class="staple-chips"></div>
+        </div>`);
+      const chips = box.querySelector(".staple-chips");
+      const count = box.querySelector(".staple-sec-count");
+      const updateCount = () => {
+        const n = draft[m.key].size;
+        count.textContent = n ? `已选 ${n} 种` : "不限定";
+      };
+      for (const f of pool) {
+        const chip = el(`<button class="chip staple-chip ${draft[m.key].has(f.id) ? "on" : ""}" type="button">${esc(f.name)}</button>`);
+        chip.addEventListener("click", () => {
+          if (draft[m.key].has(f.id)) draft[m.key].delete(f.id); else draft[m.key].add(f.id);
+          chip.classList.toggle("on", draft[m.key].has(f.id));
+          updateCount();
+        });
+        chips.appendChild(chip);
+      }
+      updateCount();
+      sections.appendChild(box);
+    }
+  };
+
+  dlg.querySelector(".dialog-head .icon-button").addEventListener("click", () => dlg.close());
+  dlg.querySelector(".staple-reset").addEventListener("click", () => {
+    for (const m of cfg.meals) draft[m.key] = new Set((cfg.defaultMap[m.key] || []).filter((id) => !!findFood(id)));
+    paint();
+    toast("已恢复谭师默认口径（未保存）");
+  });
+  dlg.querySelector(".staple-save").addEventListener("click", async () => {
+    const value = {};
+    let total = 0;
+    for (const m of cfg.meals) { value[m.key] = [...draft[m.key]]; total += draft[m.key].size; }
+    state.pack[cfg.packKey] = value;
+    const ok = await savePack();
+    if (ok) {
+      toast(total ? cfg.appliedMsg : cfg.clearedMsg);
+      dlg.close();
+      if (typeof onSaved === "function") onSaved();
+    }
+  });
+  dlg.addEventListener("close", () => dlg.remove());
+
+  paint();
+  dlg.showModal();
+}
+
+// 餐次主食安排：写入 pack.staples
+function openStaplePicker(onSaved) {
+  openMealMultiPicker({
+    kicker: "MEAL STAPLES",
+    title: "餐次主食安排",
+    hint: "按谭师口径：燕麦只在早餐、午餐大米、晚餐薯类轮换。碳水按「GI + 饱腹感 + 活动量」匹配餐次——白天活动多用米面，晚间活动少用高纤薯类压食欲。某一餐全部取消 = 该餐不限定主食。",
+    emptyType: "主食",
+    pool: staplePool(),
+    meals: STAPLE_MEALS,
+    defaultMap: DEFAULT_STAPLES,
+    currentMap: mealStaples(),
+    resetLabel: "恢复谭师口径",
+    appliedMsg: "餐次主食安排已更新",
+    clearedMsg: "已取消全部主食限定",
+    packKey: "staples",
+  }, onSaved);
+}
+
+// 餐次蛋白安排：写入 pack.proteins。与主食同源——按餐次限定蛋白来源，
+// 否则 7 天轮换会排出「午餐 7 个鸡蛋」这种不成立的组合。
+function openProteinPicker(onSaved) {
+  openMealMultiPicker({
+    kicker: "MEAL PROTEIN",
+    title: "餐次蛋白安排",
+    hint: "按谭师口径：早餐全蛋、午餐白肉或虾仁、晚餐瘦牛肉。蛋白来源按餐次限定，早餐不会出现正餐肉类，午餐也不会只剩鸡蛋。某一餐全部取消 = 该餐不限定蛋白。",
+    emptyType: "蛋白质",
+    pool: proteinPool(),
+    meals: PROTEIN_MEALS,
+    defaultMap: DEFAULT_PROTEINS,
+    currentMap: mealProteins(),
+    resetLabel: "恢复谭师口径",
+    appliedMsg: "餐次蛋白安排已更新",
+    clearedMsg: "已取消全部蛋白限定",
+    packKey: "proteins",
+  }, onSaved);
+}
+
+// 每日固定脂肪选择器：为早餐 / 晚餐各选一样坚果并设定每日固定克数，写入 pack.fatFixes。
+// 这两项是「每天固定吃」的量，不参与轮换、也不作为可调脂肪源；其余脂肪由烹调油补足。
+function openFatFixPicker(onSaved) {
+  const dlg = document.createElement("dialog");
+  dlg.className = "food-picker staple-picker";
+  dlg.innerHTML = `
+    <div class="dialog-head">
+      <div><span class="section-kicker">FIXED FAT</span><h2>每日固定脂肪</h2></div>
+      <button class="icon-button" type="button" aria-label="关闭">×</button>
+    </div>
+    <div class="staple-body">
+      <p class="hint-text">南瓜子与混合坚果按谭师口径「每天固定吃」，不参与 7 天轮换、也不作为可调脂肪源；其余脂肪一律由烹调油在午餐 / 晚餐补足。克数为每日固定量，选「不设」即取消该项。</p>
+      <div class="staple-sections"></div>
+    </div>
+    <div class="dialog-footer">
+      <button class="text-button staple-reset" type="button">恢复默认（10g / 15g）</button>
+      <button class="text-button primary-action staple-save" type="button">保存</button>
+    </div>`;
+  document.body.appendChild(dlg);
+
+  const pool = fatFixPool();
+  const current = mealFatFixes();
+  // draft[key] = { id, amount }
+  const draft = {};
+  for (const m of FAT_FIX_MEALS) draft[m.key] = { id: current[m.key].id, amount: current[m.key].amount };
+
+  const paint = () => {
+    const sections = dlg.querySelector(".staple-sections");
+    sections.innerHTML = "";
+    if (!pool.length) {
+      sections.appendChild(el('<p class="empty">食材库里没有可作固定脂肪的坚果类食材。</p>'));
+    }
+    for (const m of FAT_FIX_MEALS) {
+      const box = el(`
+        <div class="staple-section">
+          <div class="staple-sec-head"><b>${m.name}</b><span class="staple-sec-count"></span></div>
+          <div class="staple-chips"></div>
+          <div class="fatfix-row">
+            <label class="fatfix-amount-label">每日克数</label>
+            <input class="fatfix-amount" type="number" min="0" step="1" inputmode="decimal">
+            <span class="fatfix-unit">克</span>
+          </div>
+        </div>`);
+      const chips = box.querySelector(".staple-chips");
+      const count = box.querySelector(".staple-sec-count");
+      const input = box.querySelector(".fatfix-amount");
+      const syncCount = () => {
+        const food = draft[m.key].id ? findFood(draft[m.key].id) : null;
+        count.textContent = food && draft[m.key].amount > 0 ? `${food.name} ${draft[m.key].amount}克` : "不设";
+      };
+      const paintChips = () => {
+        chips.innerHTML = "";
+        const none = el(`<button class="chip staple-chip ${draft[m.key].id ? "" : "on"}" type="button">不设</button>`);
+        none.addEventListener("click", () => {
+          draft[m.key] = { id: "", amount: 0 };
+          input.value = "0";
+          paintChips();
+          syncCount();
+        });
+        chips.appendChild(none);
+        for (const f of pool) {
+          const chip = el(`<button class="chip staple-chip ${draft[m.key].id === f.id ? "on" : ""}" type="button">${esc(f.name)}</button>`);
+          chip.addEventListener("click", () => {
+            // 换食材时保留已填的克数；若原本是「不设」则回落到默认克数
+            const keep = draft[m.key].amount > 0 ? draft[m.key].amount : (DEFAULT_FAT_FIXES[m.key].amount || 10);
+            draft[m.key] = { id: f.id, amount: keep };
+            input.value = String(keep);
+            paintChips();
+            syncCount();
+          });
+          chips.appendChild(chip);
+        }
+      };
+      input.value = String(draft[m.key].amount || 0);
+      input.addEventListener("input", () => {
+        const v = Math.max(0, Number(input.value) || 0);
+        draft[m.key] = { id: draft[m.key].id, amount: v };
+        if (v <= 0) draft[m.key].id = "";
+        paintChips();
+        syncCount();
+      });
+      paintChips();
+      syncCount();
+      sections.appendChild(box);
+    }
+  };
+
+  dlg.querySelector(".dialog-head .icon-button").addEventListener("click", () => dlg.close());
+  dlg.querySelector(".staple-reset").addEventListener("click", () => {
+    for (const m of FAT_FIX_MEALS) {
+      const d = DEFAULT_FAT_FIXES[m.key];
+      draft[m.key] = { id: d.id, amount: d.amount };
+    }
+    paint();
+    toast("已恢复默认固定脂肪（未保存）");
+  });
+  dlg.querySelector(".staple-save").addEventListener("click", async () => {
+    const value = {};
+    for (const m of FAT_FIX_MEALS) {
+      const d = draft[m.key];
+      value[m.key] = { id: d.amount > 0 ? d.id : "", amount: d.amount > 0 ? d.amount : 0 };
+    }
+    state.pack.fatFixes = value;
+    const ok = await savePack();
+    if (ok) {
+      const any = FAT_FIX_MEALS.some((m) => value[m.key].id && value[m.key].amount > 0);
+      toast(any ? "每日固定脂肪已更新" : "已取消全部固定脂肪");
+      dlg.close();
+      if (typeof onSaved === "function") onSaved();
+    }
+  });
+  dlg.addEventListener("close", () => dlg.remove());
+
+  paint();
   dlg.showModal();
 }
 
