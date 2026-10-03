@@ -227,6 +227,8 @@ button { font-family: inherit; letter-spacing: 0.02em; }
   background: var(--primary); color: #fff;
   display: inline-flex; align-items: center; justify-content: center;
   box-shadow: var(--shadow-1);
+  /* 不许被挤：窄屏时它是 flex 子项，曾被品牌文字挤到 26px（logo 变形） */
+  flex-shrink: 0;
   transition: background var(--dur-base) var(--ease-out);
 }
 .brand-mark i { width: 20px; height: 20px; display: block; }
@@ -422,10 +424,20 @@ button { font-family: inherit; letter-spacing: 0.02em; }
 /* ==========================================================================
    模块导航
    ========================================================================== */
+/* 置顶导航：贴在顶栏下沿。
+   两个坑（都踩过）：
+   ① 不能写死 top —— 顶栏高度会变（窄屏品牌换行 → 手机上是 100px，不是 67px），
+      写死就会滑到顶栏底下被盖住（顶栏 z-index 高于导航）。故改读 --topbar-h（实测值）。
+   ② 必须有背景 —— 否则滚动时正文从按钮缝隙里透出来（`.module-nav` 曾是全透明）。
+   背景铺满整行（内层 .module-nav-inner 才限宽 760px 对齐正文），故本层不再设 max-width。 */
 .module-nav {
-  display: flex; max-width: 760px; margin: 0 auto; padding: 10px 22px;
-  gap: 6px; position: sticky; top: 67px; z-index: 10;
+  position: sticky; top: calc(var(--topbar-h, 67px) - 1px); z-index: 10;
+  padding: 10px 22px;
+  background: var(--topbar-bg);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
 }
+.module-nav-inner { display: flex; max-width: 760px; margin: 0 auto; gap: 6px; }
 .module-nav button {
   flex: 1; border: none; background: transparent; cursor: pointer;
   padding: 11px 4px; font-size: 14px; color: var(--muted);
@@ -898,6 +910,18 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(3px); }
 /* ==========================================================================
    响应式
    ========================================================================== */
+
+/* 窄屏（手机 / 小平板 / 分屏）品牌只留图标。
+   原因：顶栏一行要装下「品牌 + 主题三选一 + 权限徽章 + 两个图标按钮」，
+   390px 下「图标+文字」137px + 操作区 237px = 374px > 可用 358px，必然溢出 ——
+   文字被拆成两行、logo 被 flex 挤到 26px，顶栏撑到 100px。
+   阈值取 620px：再往下连「文字自动放大」（移动端浏览器会给长文本放大字号）
+   都会把 541~620px 这一段顶成两行，故一并收进这一档。
+   名称仍在 <a aria-label="减脂工作台首页"> 与页面标题里，无障碍不受影响。 */
+@media (max-width: 620px) {
+  .brand-text { display: none; }
+}
+
 @media (max-width: 540px) {
   .macro-grid { grid-template-columns: repeat(2, 1fr); }
   .meal-macros.cols-4 { grid-template-columns: repeat(2, 1fr); }
@@ -1155,4 +1179,47 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(3px); }
   .ge-note { padding: 10px 12px; }
   .studio-actions { flex-direction: column; }
   .studio-actions .text-button:last-child { margin-left: 0; }
+}
+
+/* ==========================================================================
+   移动端触摸体验：阻止「点一下就自动放大页面」
+   --------------------------------------------------------------------------
+   手机上出现"点哪儿页面就放大"，是两个互不相干的原因叠加，都要治：
+
+   ① 双击缩放（double-tap zoom）
+      手指连续轻点两下（例如连按步进器的 ＋ 或 −）会被浏览器判定为"双击"，
+      整页放大。对策是 touch-action: manipulation —— 它只关掉双击缩放、
+      并顺带去掉 300ms 点击延迟，仍然保留平移和双指缩放，
+      所以不影响正常滚动，也不牺牲无障碍（想放大仍可双指捏合）。
+
+   ② 输入框聚焦缩放（iOS 的硬性行为）
+      iOS Safari 在聚焦 font-size < 16px 的输入框时，会强制把整页放大，
+      否则就把输入框顶到屏幕外。这是浏览器写死的，没有别的绕法：
+      触摸设备上的输入框字号必须 ≥ 16px。用 @media (pointer: coarse)
+      限定范围，桌面端版式完全不受影响。
+   ========================================================================== */
+html, body {
+  touch-action: manipulation;
+  -webkit-text-size-adjust: 100%;
+}
+
+button, a, label, summary, input, select, textarea, [role="button"],
+.step-btn, .step-value, .cat-chip, .picker-item, .fav-chip, .module-nav button {
+  touch-action: manipulation;
+}
+
+@media (pointer: coarse) {
+  /* ② 抬到 16px，iOS/Android 都不再自动放大 */
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+
+  /* 字号抬高后同步放宽小控件，避免文字被挤 */
+  .step-value-input, .fe-amount { height: 34px; width: 76px; }
+  .picker-grams { width: 88px; }
+  .ge-input { padding: 7px 8px; }
+  .meal-macros input, .meal-macros select { padding: 10px 11px; }
+  .fatfix-amount { width: 92px; padding: 8px 10px; }
 }

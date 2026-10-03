@@ -3,7 +3,7 @@
 
 // 注意：静态资源（含模块）必须带 ?v= 版本号，否则 CDN 会按完整 URL 命中旧缓存。
 // 版本号同步点：本文件 import、cloud-init.js 的 import("./app.mjs?v=")、index.html 的 app.css/cloud-init.js。
-import { createFatLossHostAdapter } from "./host-adapter.mjs?v=24";
+import { createFatLossHostAdapter } from "./host-adapter.mjs?v=26";
 
 const METHOD_NAMES = {
   lifestyle: "生活化减脂",
@@ -153,7 +153,7 @@ function foodType(f) {
 
 async function loadFoodDb() {
   try {
-    const res = await fetch("/fooddb.json?v=24");
+    const res = await fetch("/fooddb.json?v=26");
     if (res.ok) state.foodDb = (await res.json()).items || [];
   } catch (e) {
     state.foodDb = [];
@@ -3262,6 +3262,26 @@ function setupNav() {
   });
 }
 
+// 把顶栏实测高度写进 --topbar-h，供置顶导航定位（top: calc(var(--topbar-h) - 1px)）。
+// 为什么必须实测：顶栏高度不是常量 —— 桌面 67px，手机上品牌文字换行会撑到 100px，
+// 换主题也会改字体度量。写死任何一个值，另一种情况就会错位（导航被顶栏盖住）。
+function syncTopbarHeight() {
+  const bar = document.querySelector(".topbar");
+  if (!bar) return;
+  const apply = () => {
+    const h = Math.round(bar.getBoundingClientRect().height);
+    if (h > 0) document.documentElement.style.setProperty("--topbar-h", h + "px");
+  };
+  apply();
+  if (typeof ResizeObserver === "function") {
+    new ResizeObserver(apply).observe(bar);
+  } else {
+    window.addEventListener("resize", apply);
+  }
+  // 网页字体异步加载完成后度量会变，需再量一次
+  if (document.fonts?.ready) document.fonts.ready.then(apply).catch(() => {});
+}
+
 // 风格切换（右上角三选一胶囊）。初始读取 localStorage，点击切换 + 持久化。
 const THEME_KEY = "fatloss_theme";
 const THEMES = ["organic", "industrial", "editorial"];
@@ -3367,6 +3387,7 @@ async function init() {
   }
   buildTabs();
   setupNav();
+  syncTopbarHeight();
   setupDialog();
   try {
     await loadPack();

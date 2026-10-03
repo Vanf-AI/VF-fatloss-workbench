@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-// 缓存版本号自检：确保 6 个静态资源引用点都带 ?v=N（或数字），且版本号完全一致。
+// 缓存版本号自检：确保 7 个静态资源引用点都带 ?v=N（或数字），且版本号完全一致。
+// 7 = index.html 的 app.css / cloud-init.js / default-pack.js + cloud-init.js 的 app.mjs
+//     + app.mjs 的 host-adapter.mjs / fooddb.json + build.json
 //
 // 背景（真实事故 1）：CDN 按「完整 URL」缓存。host-adapter.mjs 曾用裸路径 import，
 // CDN 一直返回旧副本（没有 llm 字段），线上「下一阶段餐单」于是报
@@ -32,6 +34,12 @@ const REFS = [
     file: "index.html",
     label: "index.html → /cloud-init.js",
     re: /\/cloud-init\.js\?v=(\d+)/,
+    expect: "带 ?v=N",
+  },
+  {
+    file: "index.html",
+    label: "index.html → /default-pack.js",
+    re: /\/default-pack\.js\?v=(\d+)/,
     expect: "带 ?v=N",
   },
   {
@@ -149,6 +157,7 @@ async function main() {
       `app.css?v=${v}`,
       `cloud-init.js?v=${v}`,
       `host-adapter.mjs?v=${v}`,
+      `default-pack.js?v=${v}`,
       `fooddb.json?v=${v}`,
       "build.json",
     ];
@@ -182,11 +191,11 @@ async function main() {
   if (problems.length) {
     console.error("\n发现问题：");
     for (const p of problems) console.error(`  - ${p}`);
-    console.error("\n修复：把全部 6 个引用点（含 build.json）统一改成同一个新版本号，重新发布，再跑一次本脚本（带线上 URL）。");
+    console.error("\n修复：把全部 7 个引用点（含 build.json）统一改成同一个新版本号，重新发布，再跑一次本脚本（带线上 URL）。");
     process.exit(1);
   }
 
-  console.log("\n全部通过：6 个引用点版本号一致，无裸路径引用，版本自愈探针在位。");
+  console.log("\n全部通过：7 个引用点版本号一致，无裸路径引用，版本自愈探针在位。");
 }
 
 main();

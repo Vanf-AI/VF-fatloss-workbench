@@ -35,20 +35,23 @@ node scripts/check_template_hygiene.mjs [模板目录]   # 默认 ../assets/fron
 
 > **命令陷阱（踩过两次）**：macOS 自带 BSD grep 的**基本正则不支持 `\|` 作「或」**。`grep "wbpk_\|35037" file` 永远匹配不到任何东西，会给出「无凭据残留」的**假阴性**——曾因此误判模板已脱敏。查多关键字一律用 `grep -E "a|b"`，或分开 grep。
 
-**缓存版本号（踩过的坑，务必逐项核对）**：CDN 按「完整 URL」缓存，裸路径会被钉在首次抓取的那份副本上，因此**每一个**静态资源引用都必须带 `?v=N`。发布新版本时同步递增全部版本号，共 6 个引用点：
+**缓存版本号（踩过的坑，务必逐项核对）**：CDN 按「完整 URL」缓存，裸路径会被钉在首次抓取的那份副本上，因此**每一个**静态资源引用都必须带 `?v=N`。发布新版本时同步递增全部版本号，共 7 个引用点：
 
 | # | 文件 | 引用 |
 |---|---|---|
 | 1 | `index.html` | `/app.css?v=N` |
 | 2 | `index.html` | `/cloud-init.js?v=N` |
-| 3 | `cloud-init.js` | `import("./app.mjs?v=N")` |
-| 4 | `app.mjs` | `import ... from "./host-adapter.mjs?v=N"` |
-| 5 | `app.mjs` | `fetch("/fooddb.json?v=N")` |
-| 6 | `build.json` | `{"build":"N"}` —— 版本自愈探针的比对基准 |
+| 3 | `index.html` | `/default-pack.js?v=N` |
+| 4 | `cloud-init.js` | `import("./app.mjs?v=N")` |
+| 5 | `app.mjs` | `import ... from "./host-adapter.mjs?v=N"` |
+| 6 | `app.mjs` | `fetch("/fooddb.json?v=N")` |
+| 7 | `build.json` | `{"build":"N"}` —— 版本自愈探针的比对基准 |
 
-第 4 点是真实事故：`host-adapter.mjs` 曾用裸路径 import，CDN 一直返回旧副本（缺字段），当时表现为线上「下一阶段餐单」报错「宿主未接入大模型通道」——而 `app.mjs` / `cloud-init.js` 都是最新的。**只漏一个模块，功能就整条断掉。**（该功能后来已改为本地算法、不再走云端通道，但这条缓存教训对任何模块都成立。）发布后必须用 `curl` 逐条核对：每个 `?v=N` 返回 200，且响应体字节数与本地一致。
+> 第 3 点（`default-pack.js`）是 2026-10-03 补进来的：它一直挂在 `?v=2` 上，从未随发布递增，等于给自己留了个「改了却拉不到新版」的暗雷。**新增任何带 `?v=` 的引用，都要同步加进 `check_cache_versions.mjs` 的 `REFS` 与线上比对列表**，否则脚本会「全部通过」却漏掉它。
 
-**第 6 点（`build.json`）与「用户看到旧版」这个更隐蔽的坑配套**：`?v=N` 只能保证「新页面拉到新资源」，救不了「浏览器根本没去拉新页面」。托管站点不给 `Cache-Control`，浏览器会对 `index.html` **做启发式缓存**（按 `Last-Modified` 推算新鲜期，可达数小时），于是出现：代码已发布、CDN 上 `app.mjs?v=N` 是新版，但用户页面还指着 `app.mjs?v=N-2`，界面上残留着早就删掉的栏目。**v22 → v23 那次发布就踩过**：v23 已删掉复盘卡上的「下一阶段优先食材」，用户页面却还停在 v22 的 HTML（仍引用 `app.mjs?v=22`），于是重新看到了已被删除的栏目。
+第 5 点是真实事故：`host-adapter.mjs` 曾用裸路径 import，CDN 一直返回旧副本（缺字段），当时表现为线上「下一阶段餐单」报错「宿主未接入大模型通道」——而 `app.mjs` / `cloud-init.js` 都是最新的。**只漏一个模块，功能就整条断掉。**（该功能后来已改为本地算法、不再走云端通道，但这条缓存教训对任何模块都成立。）发布后必须用 `curl` 逐条核对：每个 `?v=N` 返回 200，且响应体字节数与本地一致。
+
+**第 7 点（`build.json`）与「用户看到旧版」这个更隐蔽的坑配套**：`?v=N` 只能保证「新页面拉到新资源」，救不了「浏览器根本没去拉新页面」。托管站点不给 `Cache-Control`，浏览器会对 `index.html` **做启发式缓存**（按 `Last-Modified` 推算新鲜期，可达数小时），于是出现：代码已发布、CDN 上 `app.mjs?v=N` 是新版，但用户页面还指着 `app.mjs?v=N-2`，界面上残留着早就删掉的栏目。**v22 → v23 那次发布就踩过**：v23 已删掉复盘卡上的「下一阶段优先食材」，用户页面却还停在 v22 的 HTML（仍引用 `app.mjs?v=22`），于是重新看到了已被删除的栏目。
 
 修法是 `index.html` 末尾那段**版本自愈探针**：加载时探一次 `build.json`（带时间戳 `?t=` 绕开缓存），若线上 `build` 比自己新，就 `location.replace("/?b=<N>")` 换一个 URL 重开——换 URL 等于换缓存键，一定拿到新 HTML。探针只在**页面加载时**跑（不做定时轮询，避免用户填到一半被重载），并用 `sessionStorage` 记一次已跳转，**绝不循环**；探针失败（离线等）静默保持现状。所以：
 
@@ -62,13 +65,13 @@ node scripts/check_template_hygiene.mjs [模板目录]   # 默认 ../assets/fron
 node scripts/check_cache_versions.mjs <站点目录> https://<站点域名>
 ```
 
-它会核对 6 个引用点是否齐全（含 `build.json` 与版本自愈探针）、版本号是否一致、有无裸路径残留，并抓线上逐个比对字节数、确认 `host-adapter.mjs` 里仍有 `llm:` 定义（宿主契约里保留的可选能力，供其他应用复用）。全部通过才退出 0；发现缺失或不一致退出 1 并列出问题。
+它会核对 7 个引用点是否齐全（含 `build.json` 与版本自愈探针）、版本号是否一致、有无裸路径残留，并抓线上逐个比对字节数、确认 `host-adapter.mjs` 里仍有 `llm:` 定义（宿主契约里保留的可选能力，供其他应用复用）。全部通过才退出 0；发现缺失或不一致退出 1 并列出问题。
 
 手工核对的等价命令：
 
 ```bash
 E="https://<站点域名>"
-for p in "app.mjs?v=N" "app.css?v=N" "cloud-init.js?v=N" "host-adapter.mjs?v=N" "fooddb.json?v=N" "build.json"; do
+for p in "app.mjs?v=N" "app.css?v=N" "cloud-init.js?v=N" "host-adapter.mjs?v=N" "default-pack.js?v=N" "fooddb.json?v=N" "build.json"; do
   printf "%-26s" "$p"; curl -s -o /dev/null -w "%{http_code} %{size_download}\n" "$E/$p"
 done
 curl -s "$E/app.mjs?v=N" | grep -n "host-adapter.mjs"   # 确认 import 已带版本号
@@ -181,7 +184,7 @@ node scripts/build_deployment_manifest.mjs \
 
 - 优先回到原任务或通过 `deploymentId` 定位原应用，更新同一 Sites 项目。
 - 保留原数据库集合（`fatloss_documents`）、RLS 权限规则、登录身份、只读发布副本和正式域名。
-- 替换 `app.mjs`、`app.css`、`cloud-init.js`、`host-adapter.mjs`、`fooddb.json` 等静态资源时，同步递增「缓存版本号」一节的 6 个引用点（含 `build.json`），发布后跑 `scripts/check_cache_versions.mjs` 验证；宿主适配器只按目标版本差异更新。
+- 替换 `app.mjs`、`app.css`、`cloud-init.js`、`host-adapter.mjs`、`default-pack.js`、`fooddb.json` 等静态资源时，同步递增「缓存版本号」一节的 7 个引用点（含 `build.json`），发布后跑 `scripts/check_cache_versions.mjs` 验证；宿主适配器只按目标版本差异更新。
 - 发布前后各读取一次数据库 revision。版本变化时重新生成备份，禁止覆盖用户刚保存的内容。
 - 发布后同时验证编辑地址与只读分享地址；只检查公开首页不足以完成升级验收。
 

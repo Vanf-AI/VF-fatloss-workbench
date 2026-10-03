@@ -49,7 +49,7 @@ author: "VanF"
 3. 用 `scripts/build_deployment_backup.mjs` 建立带 SHA-256 的升级前备份，向用户展示版本差异、迁移需求、链接影响和回滚点。
 4. 纯代码升级只替换原项目中的静态资源、版本清单和确有变化的宿主适配器，禁止初始化数据库或写入示例数据。数据 schema 变化只能运行目标清单登记并经过测试的迁移。
 5. 发布后导出线上数据，运行 `scripts/verify_deployment_upgrade.mjs`，并在编辑入口和只读分享入口完成真实浏览器验收（**直接对线上域名验收，别起本地静态常驻服务**；站点还没发布、或要验未上线改动时才起本地服务，且用完必须停）。失败时恢复旧资源；存在并发 revision 时停止覆盖并重新规划。
-6. 递增并核对**全部 6 个**缓存版本号引用点（`index.html` 的 app.css/cloud-init.js、`cloud-init.js` 的 `app.mjs`、`app.mjs` 的 `host-adapter.mjs` 与 `fooddb.json`、`build.json` 的 `build`），再跑 `scripts/check_cache_versions.mjs` 验证每个 `?v=N` 与 `build.json` 的字节数与本地一致。少写一个，就可能出现「代码已更新但某功能整条报错」的假故障；`build.json` 漏改则会触发版本自愈探针反复重开。详见 [升级协议](references/upgrading-deployments.md)。
+6. 递增并核对**全部 7 个**缓存版本号引用点（`index.html` 的 app.css/cloud-init.js/default-pack.js、`cloud-init.js` 的 `app.mjs`、`app.mjs` 的 `host-adapter.mjs` 与 `fooddb.json`、`build.json` 的 `build`），再跑 `scripts/check_cache_versions.mjs` 验证每个 `?v=N` 与 `build.json` 的字节数与本地一致。少写一个，就可能出现「代码已更新但某功能整条报错」的假故障；`build.json` 漏改则会触发版本自愈探针反复重开。详见 [升级协议](references/upgrading-deployments.md)。
 7. 把站点改动回填 `assets/frontend-template/` 后，**必须立刻再脱敏一次**（`cp` 会把真实 `endpoint` / `publishableKey` / 实例日期带进模板），然后跑 `scripts/check_template_hygiene.mjs` 确认无凭据与实例数据残留。查多关键字一律用 `grep -E`：BSD grep 不支持 `\|`，会给出「无残留」的假阴性。
 
 ## 边界

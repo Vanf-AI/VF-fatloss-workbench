@@ -4,7 +4,6 @@
   "use strict";
 
   var CONFIG = {
-    // 部署时替换为真实值（发布为应用后由云服务提供）
     endpoint: "replace-at-deploy-time",
     publishableKey: "replace-at-deploy-time",
   };
@@ -255,7 +254,7 @@
     if (appLoaded) return;
     appLoaded = true;
     hideLogin();
-    await import("./app.mjs?v=24");
+    await import("./app.mjs?v=26");
   }
 
   async function boot() {
